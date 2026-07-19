@@ -32,10 +32,13 @@ The op-registry deepening and richer GUI-package handling live in a sibling repo
 | 4 distfiles | `distfiles.rb` | write the new ebuild, fetch, regenerate Manifest |
 | 5 artifact diff | `artifact_diff.rb` | payload file-tree diff / source build-surface diff |
 | 6 build test | `build_test.rb` | emerge with CI's elog config, gate, smoke, GUI probe, qa-vdb |
-| 7 finalize | `finalize.rb` | drop old ebuild, pkgcheck delta, commit as the bot |
+| 7 finalize | `finalize.rb` | drop old ebuild (per-package `keep_old = N` keeps the N most-recent instead), pkgcheck delta, commit as the bot |
 | 8 PR | `pr.rb` | push, open a PR, cc maintainers, draft multi-arch bumps |
 
-`--check` stops after classify (no writes, no remotes); `--diff-only` after stage 5; `--pr` runs all.
+`--check` stops after classify (no writes, no remotes); `--diff-only` after stage 5; `--install` runs
+the build test and finalize (a local commit) but stops before push/PR; `--pr` runs all. With per-package
+`keep_old = N`, stage 7 keeps the N most-recent versions instead of dropping the replaced one (adds the
+new ebuild, drops anything older; `0` keeps all), and `pkgdev manifest` keeps the DIST of whatever remains.
 
 ## Classification signals (stage 2)
 
@@ -72,7 +75,10 @@ test.
 
 `autobump.yml` clones this repo, installs `dev-lang/ruby`, and runs the daily sweep over the nvchecker
 queue with no model, so non-mechanical bumps get an evidence comment and stop and a human merges every
-PR. Container-only gotchas a dev box never hits: a literal `$(nproc)` in `make.conf` breaks portage's
+PR. `autobump-trial.yml` (workflow_dispatch, `targets` = nvchecker issue numbers) sets up the same
+container but calls the engine with `--install` per target — a real build test + install of a candidate
+that is not opted in, without opening a PR — to prove it bumps mechanically before a maintainer adds
+`autobump = true`. Container-only gotchas a dev box never hits: a literal `$(nproc)` in `make.conf` breaks portage's
 parser (expand it in the workflow); `pkgdev`/`pkgcheck`/`github-cli` are under `dev-util/`; pkgcore
 needs an explicit gentoo `repos.conf` or `pkgdev manifest` fails with "gentoo undefined"; and a
 `package.use/ci-binhost` must align heavy-dep USE to the binhost's binpkgs (webkit-gtk `+keyring`,

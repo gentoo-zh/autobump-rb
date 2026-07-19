@@ -24,7 +24,7 @@ module Autobump
     :cfg, :pkg, :cat, :pn, :pkgdir, :newver, :issue,
     :check, :install, :pr, :diff_only, :accept_surface, :accept_payload,
     :old_ebuild, :old_pvr, :old_pv, :old_pvr_presync, :new_ebuild, :branch, :evidence,
-    :multiarch, :gui, :payload, :smoke, :armed, :old_distfile_missing,
+    :multiarch, :gui, :payload, :smoke, :armed, :old_distfile_missing, :keep_old,
     keyword_init: true
   ) do
     # run a command; return [combined stdout+stderr, ok?, exit_code]. Ordering is

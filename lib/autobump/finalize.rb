@@ -17,17 +17,56 @@ module Autobump
       end
     end
 
+    # Order ebuild paths oldest-first by PORTAGE version (vercmp), so a caller can slice the
+    # newest N. portage's own comparator (always present on a Gentoo host) ranks _alpha/_beta/
+    # _pre/_rc as OLDER than the release; `sort -V` gets that backwards. Falls back to `sort -V`
+    # only if portage's python is somehow unavailable.
+    SORT_BY_VERSION_PY = <<~'PY'
+      import sys, os, functools
+      from portage.versions import vercmp
+      pn = sys.argv[1]; paths = sys.argv[2:]
+      def ver(p): return os.path.basename(p)[len(pn) + 1:-7]  # strip "pn-" prefix and ".ebuild"
+      paths.sort(key=functools.cmp_to_key(lambda a, b: vercmp(ver(a), ver(b)) or 0))
+      sys.stdout.write("\n".join(paths))
+    PY
+    def self.sort_by_version(paths, pn)
+      return paths if paths.size < 2
+      out = IO.popen(['python3', '-c', SORT_BY_VERSION_PY, pn, *paths], err: File::NULL, &:read)
+      return out.split("\n") if $?.success? && !out.strip.empty?
+      # fallback: the engine's usual sort -V ordering (correct except for _pre/_rc prereleases)
+      IO.popen(['sort', '-V'], 'r+') { |io| io.puts(paths); io.close_write; io.read }.split("\n").reject(&:empty?)
+    end
+
     def run
       c = @c; cfg = c.cfg; repo = cfg.repo; nul = File::NULL
       # bash removes the smoke accept_keywords file at stage-7 top unconditionally
       # (632); mirror that so a successful bump does not leak one file per run.
       system(*[cfg.sudo, 'rm', '-f', "/etc/portage/package.accept_keywords/autobump-#{c.pn}"]
                .reject { |x| x.nil? || x.empty? }, err: nul)
-      system('git', '-C', repo, 'rm', '-q', c.old_ebuild)
-      # drop the removed version's DIST entries (distfiles all local, no refetch).
-      # capture the output so a failure carries the reason (the judge/sweep sees why).
+      # keep_old (per-package): how the OLD ebuild(s) are handled when adding the new one.
+      #   absent/false -> drop the replaced version (default);
+      #   integer N>=1 -> keep the N most-recent release versions, git-rm anything older;
+      #   0 (or true)  -> keep ALL prior versions (unbounded).
+      # Whatever ebuilds remain, `pkgdev manifest` below keeps their DIST entries automatically:
+      # stage 4 already regenerated the Manifest with the new + old ebuilds present (distfiles.rb:31),
+      # so it succeeds with no refetch even when an old distfile is no longer fetchable upstream.
+      if c.keep_old.is_a?(Integer) && c.keep_old.positive?
+        # the new ebuild already exists (stage 4); keep the N highest releases, drop the rest.
+        # Order by PORTAGE version (vercmp), NOT `sort -V`: GNU sort -V ranks _alpha/_beta/_pre/_rc
+        # as NEWER than the release, but portage/pkgdev rank them OLDER -- so sort -V could keep a
+        # stale _rc and git-rm the newest real release.
+        ebuilds = `ls #{c.pkgdir.shellescape}/*.ebuild 2>/dev/null | grep -vE -- '-9{4,}'`
+                  .lines.map(&:strip).reject(&:empty?)
+        releases = Finalize.sort_by_version(ebuilds, c.pn)
+        (releases[0...-c.keep_old] || []).each { |e| system('git', '-C', repo, 'rm', '-q', e) }
+      elsif !c.keep_old
+        system('git', '-C', repo, 'rm', '-q', c.old_ebuild)
+      end
+      # keep_old == 0 (or true) -> keep ALL prior versions: neither branch runs, nothing is dropped
+      # regen the Manifest: drops the removed version's DIST entry when dropped, keeps both when
+      # keep_old (distfiles all local, no refetch). capture the output so a failure carries reason.
       mout = Dir.chdir(c.pkgdir) { IO.popen(['pkgdev', 'manifest'], err: %i[child out], &:read) }
-      raise Abort, "manifest regen after drop failed: #{mout.strip.lines.last(6).join.strip}" unless $?.success?
+      raise Abort, "manifest regen failed: #{mout.strip.lines.last(6).join.strip}" unless $?.success?
       system('git', '-C', repo, 'add', c.pkgdir)
       c.evidence.write('pkgcheck-after.txt', Finalize.pkgcheck_scan(repo, c.pkg))
       base = c.evidence.path('pkgcheck-baseline.txt'); after = c.evidence.path('pkgcheck-after.txt')

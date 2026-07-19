@@ -16,3 +16,5 @@ jobs:
         run: ruby test/pr_body.rb
       - name: heavy-dep pre-check test (hermetic)
         run: ruby test/heavy_dep.rb
+      - name: keep_old flag wiring test (hermetic)
+        run: ruby test/keep_old.rb

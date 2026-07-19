@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-task default: %i[syntax decisions pr_body heavy_dep]
+task default: %i[syntax decisions pr_body heavy_dep keep_old]
 
 desc 'ruby -c on all sources'
 task :syntax do
@@ -19,4 +19,9 @@ end
 desc 'heavy-dependency pre-check parser (hermetic)'
 task :heavy_dep do
   sh 'ruby test/heavy_dep.rb'
+end
+
+desc 'keep_old flag wiring (hermetic)'
+task :keep_old do
+  sh 'ruby test/keep_old.rb'
 end

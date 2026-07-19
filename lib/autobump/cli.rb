@@ -34,7 +34,7 @@ module Autobump
       ctx = Context.new(
         cfg: cfg, pkg: pkg, cat: cat, pn: pn, pkgdir: pkgdir, newver: newver, issue: issue,
         check: o[:check], install: o[:install], pr: o[:pr], diff_only: o[:diff_only],
-        accept_surface: o[:accept_surface], accept_payload: o[:accept_payload],
+        accept_surface: o[:accept_surface], accept_payload: o[:accept_payload], keep_old: o[:keep_old],
         old_ebuild: loc.old_ebuild, old_pvr: loc.old_pvr, old_pv: loc.old_pv,
         old_pvr_presync: loc.old_pvr, new_ebuild: loc.new_ebuild,
         branch: "#{cat}-#{pn}-#{newver}", evidence: ev, armed: false)
@@ -91,7 +91,8 @@ module Autobump
 
     def self.parse(argv)
       o = { check: false, install: false, pr: false, diff_only: false,
-            accept_surface: false, accept_payload: false, pkg: nil, newver: nil, issue: nil }
+            accept_surface: false, accept_payload: false, keep_old: false,
+            pkg: nil, newver: nil, issue: nil }
       argv.each do |a|
         case a
         when '--check' then o[:check] = true
@@ -100,6 +101,8 @@ module Autobump
         when '--accept-payload' then o[:accept_payload] = true
         when '--install' then o[:install] = true
         when '--pr' then o[:pr] = true
+        when '--keep-old' then o[:keep_old] = true                   # keep ALL prior versions
+        when /\A--keep-old=(\d+)\z/ then o[:keep_old] = $1.to_i       # keep the N most-recent versions
         when %r{/} then o[:pkg] = a                                  # bash */*
         when /\A[0-9].*\.[0-9]/ then o[:newver] = a                  # bash [0-9]*.[0-9]*
         when /\A[0-9]/ # bash [0-9]* (any digit-led token: _pre/_beta/date versions)
