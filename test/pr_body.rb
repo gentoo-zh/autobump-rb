@@ -53,7 +53,7 @@ check 'source: no surface change',
       must: ['**`net-misc/tsshd`** 0.1.8 → 0.1.9', '- [x] emerge build + install',
              '- [x] `pkgcheck scan --commits --net` clean', '- smoke: --version ok: tsshd 0.1.9',
              'diff vs 0.1.8: no build-option surface changes', 'Closes #11090 · cc @vimimg'],
-      absent: ['<details>', 'not compared', '⚠️']
+      absent: ['<details>', 'not compared', 'Warning: ']
 
 # B. payload bump with real add + remove -> folded diff, both shown, PATH-SORTED
 check 'payload: add+remove folded, path-sorted (rename adjacent)',
@@ -72,7 +72,7 @@ check 'payload: old distfile gone -> warn',
       render(ctx(ev_with('c'),
                  pkg: 'app-misc/apifox', old_pvr: '2.8.38', newver: '2.8.39', old_pv: '2.8.38',
                  payload: true, old_distfile_missing: true, issue: '11081', smoke: 'installed')),
-      must: ['⚠️ no old→new diff', 'check the payload before merging'],
+      must: ['Warning: no old→new diff', 'check the payload before merging'],
       absent: ['<details>']
 
 # D. source build surface changed -> folded diff, both +/- shown
@@ -90,7 +90,7 @@ check 'source: not compared + multiarch',
                  pkg: 'x/y', old_pvr: '3.0', newver: '3.1', old_pv: '3.0',
                  payload: false, multiarch: true, smoke: 'installed')),
       must: ['build-option surface not compared', 'the emerge build gate vouches'],
-      absent: ['<details>', '⚠️ amd64 only']
+      absent: ['<details>', 'Warning: amd64 only']
 
 # F. no issue and no cc -> no trailing meta line at all
 check 'no issue / no cc -> no meta line',
