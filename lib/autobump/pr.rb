@@ -52,7 +52,7 @@ module Autobump
     private
 
     # PR body: terse checklist, English so every contributor can read it. Only the gates
-    # that actually passed get a tick and only real caveats get a ⚠️ line -- no "nothing
+    # that actually passed get a tick and only real caveats get a warning line -- no "nothing
     # changed" prose. The title is the gentoo `cat/pkg: ...` form.
     def pr_body
       c = @c
@@ -76,7 +76,7 @@ module Autobump
     # STRUCTURAL changes reach here; the asset-churn count is noted so it is not silently hidden.
     def diff_lines
       c = @c
-      return ['', "⚠️ no old→new diff: upstream keeps only its latest release, so the old distfile (#{c.old_pvr}) 404s — check the payload before merging"] if c.old_distfile_missing
+      return ['', "Warning: no old→new diff: upstream keeps only its latest release, so the old distfile (#{c.old_pvr}) 404s — check the payload before merging"] if c.old_distfile_missing
       kind = c.payload ? 'payload' : 'build-option surface'
       af   = c.payload ? 'tree-added-real.txt'   : 'surface-added.txt'
       rf   = c.payload ? 'tree-removed-real.txt' : 'surface-removed.txt'
