@@ -15,10 +15,13 @@ module Autobump
     # their USE to the binhost (package.use/ci-binhost) so they normally arrive as binpkgs; this
     # pre-check fires only when the plan would STILL build one from source (no matching binpkg),
     # deferring early instead of timing out. Not exhaustive -- add packages as they surface.
+    # net-libs/nodejs is deliberately NOT here: its from-source build is ~1h (moderate, not the
+    # multi-hour builds above), so CI is given op-timeout headroom to build it rather than defer
+    # the pnpm/npm family. Keep it off this list in step with autobump.yml's raised AUTOBUMP_OP_TIMEOUT.
     HEAVY = %w[
       dev-qt/qtwebengine dev-qt/qtwebkit net-libs/webkit-gtk
       www-client/chromium www-client/firefox mail-client/thunderbird
-      dev-lang/rust dev-lang/spidermonkey dev-lang/ghc dev-lang/mono net-libs/nodejs
+      dev-lang/rust dev-lang/spidermonkey dev-lang/ghc dev-lang/mono
       sys-devel/gcc sys-devel/clang sys-devel/llvm llvm-core/clang llvm-core/llvm
       app-office/libreoffice media-gfx/blender dev-db/mongodb dev-db/mariadb dev-db/mysql
     ].freeze
