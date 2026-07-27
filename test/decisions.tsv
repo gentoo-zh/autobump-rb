@@ -16,3 +16,4 @@ demo-cat/deps	1.0.1	3	deps artifact missing
 demo-cat/datever	20240202	0	
 demo-cat/datever	20230101	3	date version went backwards||not newer
 demo-cat/haskell	1.0.1	3	haskell-cabal
+demo-cat/twoslots	1.2.0	3	parallel release lines by SLOT

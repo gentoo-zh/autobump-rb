@@ -23,6 +23,7 @@ module Autobump
       esc << "target looks like a prerelease: #{@newver}" if prerelease?
       (m = major_jump)        and esc << m
       (nn = not_newer)        and esc << nn
+      (ps = parallel_slots)   and esc << ps
       (p = pins)              and esc << p
       (sp = source_pin)       and esc << sp
       (d = deps_artifact)     and esc << d
@@ -61,6 +62,20 @@ module Autobump
     def not_newer
       top = `printf '%s\\n%s\\n' #{@old_pv.shellescape} #{@newver.shellescape} | sort -V | tail -1`.strip
       "target version is not newer than current: #{@old_pv} -> #{@newver}" unless top == @newver
+    end
+
+    # two release lines in one package dir, separated by SLOT: games-arcade/osu-lazer-bin keeps a
+    # "stable" line fetching ${PV}-lazer and a "tachyon" line fetching ${PV}-tachyon. locate picks
+    # the highest version in the dir, which can belong to the OTHER line, and the version-only copy
+    # then fetches a distfile upstream never published. The version alone does not say which line a
+    # new release belongs to, so a human has to pick the template.
+    def parallel_slots
+      slots = Dir.glob(File.join(@pkgdir, '*.ebuild')).reject { |f| f =~ /-9{4,}\.ebuild\z/ }
+                 .filter_map { |f| File.read(f, encoding: 'UTF-8').scrub[/^[[:space:]]*SLOT=.*/] }
+                 .map { |l| l.strip.sub(/\A.*SLOT=/, '').delete('"\'') }.uniq
+      return nil if slots.length < 2
+      "package has parallel release lines by SLOT (#{slots.sort.join(', ')}) - " \
+        'the template ebuild cannot be chosen by version alone, copy the one from the matching line'
     end
 
     # pin/coupled vars (GIT_CRATES, a commit/tag/version pin) are RECORDED as evidence but do not
