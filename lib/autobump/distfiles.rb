@@ -2,8 +2,8 @@
 require 'fileutils'
 module Autobump
   # Stage 4: fetch old artifacts, create the new ebuild, fetch + manifest.
-  # A fetch/mirror failure is transient -> Abort (exit 2) so the sweep retries,
-  # not Escalate.
+  # An unreachable/slow mirror is transient -> Abort (exit 2) so the sweep retries.
+  # A file upstream does not have (404/403) is permanent -> Escalate (exit 3).
   class Distfiles
     def initialize(ctx) = (@c = ctx)
     def run
@@ -32,7 +32,16 @@ module Autobump
         c.evidence.write('fetch.log', out)
         unless ok
           puts out.lines.last(5).join
-          raise Abort, "fetch/manifest for #{c.newver} failed (missing upstream file or slow mirror)"
+          # portage says "Couldn't download" for both a 404 and an unreachable mirror, so split on
+          # what it reports per URI: a 404/403 is the upstream file not being there, which no number
+          # of retries fixes -- deferring it just files "will retry automatically" every day and
+          # hides the real defect (wrong SRC_URI path, stale pin, artifact never published).
+          # Anything else (timeout, connection reset, 5xx) is worth another sweep.
+          if out =~ %r{\b(404 Not Found|403 Forbidden|No such file or directory)\b}i
+            raise Escalate.new("upstream distfile for #{c.newver} is missing (404/403), not a slow mirror",
+                               c.evidence.dir)
+          end
+          raise Abort, "fetch/manifest for #{c.newver} failed (mirror unreachable or too slow)"
         end
         system(*[cfg.sudo, 'chown', "#{`id -un`.strip}:#{`id -gn`.strip}", 'Manifest'].reject { |x| x.nil? || x.empty? })
       end
