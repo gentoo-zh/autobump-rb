@@ -33,11 +33,13 @@ module Autobump
         unless ok
           puts out.lines.last(5).join
           # portage says "Couldn't download" for both a 404 and an unreachable mirror, so split on
-          # what it reports per URI: a 404/403 is the upstream file not being there, which no number
+          # what the fetcher reported per URI: 404/403 means the file is not there, which no number
           # of retries fixes -- deferring it just files "will retry automatically" every day and
           # hides the real defect (wrong SRC_URI path, stale pin, artifact never published).
           # Anything else (timeout, connection reset, 5xx) is worth another sweep.
-          if out =~ %r{\b(404 Not Found|403 Forbidden|No such file or directory)\b}i
+          # Match wget's own line ("ERROR 404: Not Found." / "ERROR 404: File not found.") as well
+          # as a bare status line, because the reason text differs per server.
+          if out =~ /ERROR 40[34]:/ || out =~ /\b40[34]\b[^\n]*\b(Not Found|Forbidden|File not found)\b/i
             raise Escalate.new("upstream distfile for #{c.newver} is missing (404/403), not a slow mirror",
                                c.evidence.dir)
           end
