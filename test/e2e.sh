@@ -161,8 +161,31 @@ qlist -Iqe "$PKG" >/dev/null 2>&1 || fail "$PKG not merged into vdb"
 hello_out="$(hello --version 2>&1 || true)"
 echo "$hello_out" | grep -q "$NEWVER" || fail "smoke: 'hello' did not report $NEWVER (got: $hello_out)"
 
+# ---- 7. a distfile the server does not have must escalate, not defer ---------
+# The local server has no hello-${MISSINGVER}.tar.gz, so stage 4 gets a 404. That is
+# permanent: retrying it every sweep would only refile "will retry automatically" and
+# hide the real defect. Assert exit 3 (escalate), not 2 (transient defer).
+MISSINGVER="1.0.2"
+note "running: ruby bin/autobump $PKG $MISSINGVER --install (distfile absent, expect escalate)"
+set +e
+miss_out="$(env AUTOBUMP_REPO="$OVL" \
+    AUTOBUMP_LIVE_OVERLAY="$OVL" \
+    AUTOBUMP_SYNC_REMOTE="self" \
+    AUTOBUMP_UPSTREAM_REPO="demo/e2e" \
+    AUTOBUMP_DISTDIR="$DISTDIR" \
+    AUTOBUMP_BOT_NAME="gentoo-zh autobump" \
+    AUTOBUMP_BOT_EMAIL="bot@gentoozh.org" \
+    DISTDIR="$DISTDIR" \
+    ruby "$ROOT/bin/autobump" "$PKG" "$MISSINGVER" --install 2>&1)"
+MISS_RC=$?
+set -e
+[ "$MISS_RC" = 3 ] || { printf '%s\n' "$miss_out" | tail -20; fail "missing distfile: exit $MISS_RC (expected 3, escalate)"; }
+printf '%s' "$miss_out" | grep -q "is missing (404/403)" \
+    || { printf '%s\n' "$miss_out" | tail -20; fail "missing distfile: escalation did not name the 404"; }
+
 echo
 echo "E2E PASS: engine bumped $PKG $OLDVER -> $NEWVER"
 echo "  commit : $subj"
 echo "  merged : $(qlist -Iqe "$PKG"); smoke: $hello_out"
+echo "  404    : $PKG $MISSINGVER escalated (exit 3), not deferred"
 exit 0
