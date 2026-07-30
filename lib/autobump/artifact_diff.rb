@@ -30,6 +30,54 @@ module Autobump
       } | sort -u > "$2"
     SH
 
+    # Placeholder for the version run blanked out by rule (3). No real path contains it.
+    VER_HOLE = '<v>'
+
+    # Fold benign churn out of a payload path diff so only structural add/remove is left.
+    # Pure -- no filesystem, no Context -- so test/payload_diff.rb can pin every rule.
+    # Returns [real_removed, real_added, churned_count].
+    #
+    # (1) A version-embedded rename driven by the package version: OLD_PV -> NEWVER.
+    # (2) A bundler content-hash rename: a chunk under assets/dist/_next re-hashed every
+    #     build, e.g. foo-<hashA>.js -> foo-<hashB>.js. Without this, an Electron app that
+    #     rehashes hundreds of chunks would escalate every version and dump a 1000-line
+    #     hash diff into the PR.
+    # (3) A bundled artifact on its own version stream, which (1) cannot pair because the
+    #     number in the filename is not the package version -- jetbrains-toolbox ships
+    #     bin/lib/agent-client-0.8.6635.jar and moves it to agent-client-0.8.6806.jar while
+    #     the package goes 3.6.2.85969 -> 3.6.3.86383, so all 26 jars looked structural.
+    #     Deliberately narrow: blank the dotted-numeric run in the BASENAME only and require
+    #     the directory to be identical, so a moved or renamed directory still escalates
+    #     (`find -type f` lists no directory entries, so a renamed dir shows up as its files
+    #     changing dirname, which this rule does not pair). Fold only on an exact 1:1 match;
+    #     with two candidates for one key a real removal could hide behind a coincidence.
+    def self.fold_benign(removed, added, old_pv, newver)
+      real_removed = removed.reject { |p| added.include?(p.gsub(old_pv, newver)) }
+      real_added   = added.reject   { |p| removed.include?(p.gsub(newver, old_pv)) }
+
+      hashed = lambda do |p|
+        p =~ %r{/(assets|_next|immutable|dist|static|chunks)/} &&
+          File.basename(p) =~ /[-.][A-Za-z0-9_-]{7,}\.[A-Za-z0-9]+$/
+      end
+      churned = real_removed.count(&hashed) + real_added.count(&hashed)
+      real_removed = real_removed.reject(&hashed)
+      real_added   = real_added.reject(&hashed)
+
+      key = ->(p) { "#{File.dirname(p)}/#{File.basename(p).gsub(/\d+(?:\.\d+)+/, VER_HOLE)}" }
+      rm_by_key = real_removed.group_by(&key)
+      ad_by_key = real_added.group_by(&key)
+      paired = rm_by_key.keys.select { |k| rm_by_key[k].size == 1 && ad_by_key[k]&.size == 1 }
+                        .to_h { |k| [k, true] }
+      unless paired.empty?
+        churned += real_removed.count { |p| paired[key.call(p)] } +
+                   real_added.count { |p| paired[key.call(p)] }
+        real_removed = real_removed.reject { |p| paired[key.call(p)] }
+        real_added   = real_added.reject { |p| paired[key.call(p)] }
+      end
+
+      [real_removed, real_added, churned]
+    end
+
     def initialize(ctx) = (@c = ctx)
 
     def run
@@ -118,20 +166,7 @@ module Autobump
       File.write(ev('tree-added.txt'),   comm('-13', ev('tree-old.txt'), ev('tree-new.txt')))
       removed = File.readlines(ev('tree-removed.txt')).map(&:chomp).reject(&:empty?)
       added   = File.readlines(ev('tree-added.txt')).map(&:chomp).reject(&:empty?)
-      # Two kinds of benign churn are NOT a structural change and must be folded out so only real
-      # add/remove remains: (1) a version-embedded rename (removed old-PV path + added new-PV path);
-      # (2) a bundler content-hash rename -- a chunk under assets/dist/_next re-hashed every build,
-      # e.g. foo-<hashA>.js -> foo-<hashB>.js. Without (2), an Electron app that rehashes hundreds
-      # of chunks would wrongly escalate every version and dump a 1000-line hash diff into the PR.
-      real_removed = removed.reject { |p| added.include?(p.gsub(c.old_pv, c.newver)) }
-      real_added   = added.reject   { |p| removed.include?(p.gsub(c.newver, c.old_pv)) }
-      churn = lambda do |p|
-        p =~ %r{/(assets|_next|immutable|dist|static|chunks)/} &&
-          File.basename(p) =~ /[-.][A-Za-z0-9_-]{7,}\.[A-Za-z0-9]+$/
-      end
-      churned = real_removed.count(&churn) + real_added.count(&churn)
-      real_removed = real_removed.reject(&churn)
-      real_added   = real_added.reject(&churn)
+      real_removed, real_added, churned = self.class.fold_benign(removed, added, c.old_pv, c.newver)
       # always write both real (structural-only) files + the churn count, so the PR body can tell
       # "compared, no structural change" from "not compared" and can note the asset churn.
       File.write(ev('tree-removed-real.txt'), real_removed.empty? ? '' : real_removed.join("\n") + "\n")
