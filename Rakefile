@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-task default: %i[syntax decisions pr_body heavy_dep keep_old]
+task default: %i[syntax decisions pr_body heavy_dep keep_old payload_diff]
 
 desc 'ruby -c on all sources'
 task :syntax do
@@ -24,4 +24,9 @@ end
 desc 'keep_old flag wiring (hermetic)'
 task :keep_old do
   sh 'ruby test/keep_old.rb'
+end
+
+desc 'payload path-diff fold rules (hermetic)'
+task :payload_diff do
+  sh 'ruby test/payload_diff.rb'
 end
