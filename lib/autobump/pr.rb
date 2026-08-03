@@ -37,6 +37,10 @@ module Autobump
       # is the common case -- every bump branch is new, and a fresh CI clone never fetched it).
       # The open-PR guard above already protects a branch under active review; a leftover branch
       # from an aborted prior attempt (no open PR) is safe to overwrite.
+      # print the commit's file list before pushing. A rejected push names only the offending
+      # path (GitHub's workflow-scope guard does exactly that), and the evidence dir is gone
+      # with the CI container, so this is the only record of what the commit actually carried.
+      puts `git -C #{cfg.repo.shellescape} show --oneline --stat HEAD`
       raise Abort, 'push failed' \
         unless system('git', '-C', cfg.repo, 'push', '-u', '--force', cfg.push_remote, c.branch)
       body = c.evidence.path('pr-body.md')
