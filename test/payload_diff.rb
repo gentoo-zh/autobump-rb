@@ -29,9 +29,67 @@ check 'pkg-version rename not counted as churn', ch, 0
 # --- rule 2: bundler content-hash rename -----------------------------------------------
 rm, ad, = F.call(%w[app/assets/main-a1b2c3d4.js], %w[app/assets/main-e5f6a7b8.js], '1', '2')
 check 'asset hash rename folds', [rm, ad], [[], []]
-# outside an asset dir the same shape is NOT hash churn; it still has to pair some other way
+# Outside the old asset dirs, a different basename does not make an exact hash pair.
 rm, = F.call(%w[bin/main-a1b2c3d4.bin], %w[bin/other-e5f6a7b8.bin], '1', '2')
-check 'hash rule needs an asset dir', rm, %w[bin/main-a1b2c3d4.bin]
+check 'unpaired hash stays structural', rm, %w[bin/main-a1b2c3d4.bin]
+
+# Pairing is by directory and basename with only the content hash blanked, not by a
+# directory-name allowlist.
+ion_dist_removed = %w[
+  usr/lib/claude-desktop/resources/ion-dist/_frame-rt/_runtime/kernel.C5XtPPRo.js
+  usr/lib/claude-desktop/resources/ion-dist/_frame-rt/_runtime/manifest.064207474966cc9d.json
+]
+ion_dist_added = %w[
+  usr/lib/claude-desktop/resources/ion-dist/_frame-rt/_runtime/kernel.N7qLm2Vx.js
+  usr/lib/claude-desktop/resources/ion-dist/_frame-rt/_runtime/manifest.b8d9e0f1a2c3d4e5.json
+]
+rm, ad, ch = F.call(ion_dist_removed, ion_dist_added, '1', '2')
+check 'ion-dist hash rehashes fold', [rm, ad], [[], []]
+check 'ion-dist hash rehashes count as churn', ch, 4
+
+# A numeric chunk is not a content hash under rule (2), so its replacement remains visible.
+stage_removed = %w[
+  opt/SiYuan/resources/stage/build/app/base.5a741c39f95f77975aff.css
+  opt/SiYuan/resources/stage/build/mobile/main.128082a998f508728f76.js
+  opt/SiYuan/resources/stage/build/export/805.js
+]
+stage_added = %w[
+  opt/SiYuan/resources/stage/build/app/base.f1e2d3c4b5a697887766.css
+  opt/SiYuan/resources/stage/build/mobile/main.fedcba98765432100123.js
+  opt/SiYuan/resources/stage/build/export/806.js
+]
+rm, ad, ch = F.call(stage_removed, stage_added, '1', '2')
+check 'stage build hash rehashes fold but numeric chunk stays structural',
+      [rm, ad],
+      [%w[opt/SiYuan/resources/stage/build/export/805.js],
+       %w[opt/SiYuan/resources/stage/build/export/806.js]]
+check 'stage build hash rehashes count as churn', ch, 4
+
+rm, ad, = F.call(
+  %w[usr/lib/claude-desktop/resources/ion-dist/_frame-rt/_runtime/kernel.C5XtPPRo.js],
+  [], '1', '2'
+)
+check 'unpaired content-hash removal stays structural', [rm, ad],
+      [%w[usr/lib/claude-desktop/resources/ion-dist/_frame-rt/_runtime/kernel.C5XtPPRo.js], []]
+
+rm, ad, = F.call(
+  %w[app/build/main.a1b2c3d4.js app/build/main.e5f6a7b8.js],
+  %w[app/build/main.01234567.js], '1', '2'
+)
+check 'ambiguous hash pairing keeps removals structural', [rm, ad],
+      [%w[app/build/main.a1b2c3d4.js app/build/main.e5f6a7b8.js], []]
+
+rm, ad, = F.call(%w[package/prebuilds/linux-x64/copilot-runtime-bin], [], '1', '2')
+check 'upstream copilot runtime removal stays structural', [rm, ad],
+      [%w[package/prebuilds/linux-x64/copilot-runtime-bin], []]
+
+# A lowercase word is a name, not a hash: a renamed .desktop must stay visible.
+rm, ad, = F.call(%w[usr/share/applications/org.example.desktop],
+                 %w[usr/share/applications/org.example2.desktop], '1', '2')
+check 'renamed desktop file stays structural', rm, %w[usr/share/applications/org.example.desktop]
+
+rm, ad, = F.call(%w[AppDir/share/dns/root.hints], [], '1', '2')
+check 'root hints removal stays structural', [rm, ad], [%w[AppDir/share/dns/root.hints], []]
 
 # --- rule 3: independent version stream (the jetbrains-toolbox case) -------------------
 # 26 jars moved 0.8.6635 -> 0.8.6806 while the package went 3.6.2.85969 -> 3.6.3.86383.

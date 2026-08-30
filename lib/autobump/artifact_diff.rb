@@ -30,18 +30,23 @@ module Autobump
       } | sort -u > "$2"
     SH
 
-    # Placeholder for the version run blanked out by rule (3). No real path contains it.
+    # Placeholder for the version or hash run blanked out by pairing rules (2) and (3).
     VER_HOLE = '<v>'
+    HASH_RUN = /(?<=[-.])[A-Za-z0-9_-]{7,}(?=\.[A-Za-z0-9]+\z)/
 
     # Fold benign churn out of a payload path diff so only structural add/remove is left.
     # Pure -- no filesystem, no Context -- so test/payload_diff.rb can pin every rule.
     # Returns [real_removed, real_added, churned_count].
     #
     # (1) A version-embedded rename driven by the package version: OLD_PV -> NEWVER.
-    # (2) A bundler content-hash rename: a chunk under assets/dist/_next re-hashed every
-    #     build, e.g. foo-<hashA>.js -> foo-<hashB>.js. Without this, an Electron app that
-    #     rehashes hundreds of chunks would escalate every version and dump a 1000-line
-    #     hash diff into the PR.
+    # (2) A bundler content-hash rename: a filename with seven or more ASCII letters, digits,
+    #     `_`, or `-` after `.` or `-` before its final extension, carrying a digit or mixed
+    #     case so a lowercase word is not mistaken for a hash, e.g.
+    #     foo-<hashA>.js -> foo-<hashB>.js. Fold a removal only with exactly one addition in
+    #     the same directory whose basename matches after blanking the hash; otherwise an
+    #     upstream removal remains structural. Fold hash-bearing additions on their own: they
+    #     cannot escalate, and omitting them keeps churn meaningful. Pairing catches rehashes
+    #     outside the old directory list without letting a directory hide an unreplaced file.
     # (3) A bundled artifact on its own version stream, which (1) cannot pair because the
     #     number in the filename is not the package version -- jetbrains-toolbox ships
     #     bin/lib/agent-client-0.8.6635.jar and moves it to agent-client-0.8.6806.jar while
@@ -56,12 +61,22 @@ module Autobump
       real_added   = added.reject   { |p| removed.include?(p.gsub(newver, old_pv)) }
 
       hashed = lambda do |p|
-        p =~ %r{/(assets|_next|immutable|dist|static|chunks)/} &&
-          File.basename(p) =~ /[-.][A-Za-z0-9_-]{7,}\.[A-Za-z0-9]+$/
+        run = File.basename(p)[HASH_RUN]
+        # a lowercase word is a name, not a hash: require a digit or mixed case, so a renamed
+        # `org.example.desktop` stays structural while `kernel.C5XtPPRo.js` folds.
+        !run.nil? && (run.match?(/\d/) || (run.match?(/[a-z]/) && run.match?(/[A-Z]/)))
       end
-      churned = real_removed.count(&hashed) + real_added.count(&hashed)
-      real_removed = real_removed.reject(&hashed)
-      real_added   = real_added.reject(&hashed)
+      hash_key = ->(p) { "#{File.dirname(p)}/#{File.basename(p).sub(HASH_RUN, VER_HOLE)}" }
+      rm_by_hash_key = real_removed.select(&hashed).group_by(&hash_key)
+      ad_by_hash_key = real_added.select(&hashed).group_by(&hash_key)
+      paired_hashes = rm_by_hash_key.keys.select do |k|
+        rm_by_hash_key[k].size == 1 && ad_by_hash_key[k]&.size == 1
+      end.to_h { |k| [k, true] }
+      churned = real_added.count(&hashed) + paired_hashes.size
+      real_removed = real_removed.reject do |p|
+        hashed.call(p) && paired_hashes[hash_key.call(p)]
+      end
+      real_added = real_added.reject(&hashed)
 
       key = ->(p) { "#{File.dirname(p)}/#{File.basename(p).gsub(/\d+(?:\.\d+)+/, VER_HOLE)}" }
       rm_by_key = real_removed.group_by(&key)
