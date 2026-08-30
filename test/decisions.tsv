@@ -1,7 +1,8 @@
 # Golden decision table for the classifier. Each row asserts the engine's call on a
-# fixture bump: expected exit (0 = mechanical, 3 = escalate) and, for an escalate, the
-# key phrase(s) that must appear (|| joins multiple required phrases). Every classify
-# branch is covered by at least one fixture. See test/decisions.sh.
+# fixture bump: expected exit (0 = mechanical, 2 = defer, 3 = escalate) and,
+# for a nonzero result, the key phrase(s) that must appear (|| joins multiple
+# required phrases). Every classify branch is covered by at least one fixture.
+# See test/decisions.sh.
 # pkg	newver	exit	must_contain
 demo-cat/plain	1.2.4	0	
 demo-cat/plain	1.1.0	3	not newer
@@ -12,7 +13,7 @@ demo-cat/commentpin	1.0.1	0
 demo-cat/inlinepin	1.0.1	0	
 demo-cat/patched	1.0.1	3	files/ patches
 demo-cat/multiarch	1.0.1	0	
-demo-cat/deps	1.0.1	3	deps artifact missing
+demo-cat/deps	1.0.1	2	per-version deps artifact missing (HTTP 404): https://github.com/gentoo-zh-drafts/deps/releases/download/v1.0.1/deps-1.0.1-vendor.tar.xz
 demo-cat/datever	20240202	0	
 demo-cat/datever	20230101	3	date version went backwards||not newer
 demo-cat/haskell	1.0.1	3	haskell-cabal

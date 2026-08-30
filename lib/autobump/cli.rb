@@ -43,6 +43,8 @@ module Autobump
       res = begin
         Classify.new(cfg: cfg, pkg: pkg, old_ebuild: loc.old_ebuild,
                      old_pv: loc.old_pv, newver: newver, evidence: ev).run
+      rescue Abort => e
+        die e.message
       rescue => e # an unexpected classify error defers (exit 2), never exit 1 off the contract
         die "unexpected error during classification: #{e.class}: #{e.message}"
       end

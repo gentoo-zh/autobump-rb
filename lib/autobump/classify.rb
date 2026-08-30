@@ -2,9 +2,10 @@
 require 'shellwords'
 module Autobump
   # Stage 2: deterministic classification. Each check yields an escalation note
-  # (evidence for the judge) or sets a flag. No LLM here; nothing edits RDEPEND/IUSE
-  # from a guess. A note means "this is not mechanically safe -> exit 3 for a judge",
-  # never "this code will solve it". Every branch here is pinned by test/decisions.tsv.
+  # (evidence for the judge) or a transient defer. No LLM here; nothing edits
+  # RDEPEND/IUSE from a guess. An escalation means "this is not mechanically safe
+  # -> exit 3 for a judge"; a defer waits for a transient prerequisite. Every
+  # branch here is pinned by test/decisions.tsv.
   class Classify
     Result = Struct.new(:escalations, :multiarch, :gui, :keywords_line, keyword_init: true)
 
@@ -26,14 +27,22 @@ module Autobump
       (ps = parallel_slots)   and esc << ps
       (p = pins)              and esc << p
       (sp = source_pin)       and esc << sp
-      (d = deps_artifact)     and esc << d
+      defer = deps_artifact
       (pt = applied_patches)  and esc << pt
       (hc = hackport_cabal)   and esc << hc
+      # a 404 alongside a real escalation is evidence for the human, not a reason to retry
+      esc << defer if defer && !esc.empty?
       @ev.write('classify.txt', keywords_line ? "#{keywords_line}\n" : '')
       @ev.write('escalations.txt', esc.join("\n") + "\n") unless esc.empty?
+      @ev.write('defer.txt', "#{defer}\n") if defer && esc.empty?
       ma = multiarch?
+      gui = gui?
       Log.log 'multi-arch KEYWORDS: non-amd64 will be marked untested, PR will be draft' if ma
-      Result.new(escalations: esc, multiarch: ma, gui: gui?, keywords_line: keywords_line)
+      # A missing project-generated bundle is temporal, not a safety judgment, so it defers --
+      # but only when nothing else escalated: a package that is unsafe for another reason must
+      # reach a human now instead of retrying until the sweep's cap.
+      raise Abort, defer if defer && esc.empty?
+      Result.new(escalations: esc, multiarch: ma, gui: gui, keywords_line: keywords_line)
     end
 
     private
