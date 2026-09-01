@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-task default: %i[syntax decisions pr_body heavy_dep keep_old payload_diff gui_probe]
+task default: %i[syntax decisions pr_body heavy_dep keep_old payload_diff gui_probe build_dispatch]
 
 desc 'ruby -c on all sources'
 task :syntax do
@@ -34,4 +34,9 @@ end
 desc 'GUI launch outcome classification (hermetic)'
 task :gui_probe do
   sh 'ruby test/gui_probe.rb'
+end
+
+desc 'build-test payload/install dispatch (hermetic)'
+task :build_dispatch do
+  sh 'ruby test/build_dispatch.rb'
 end
