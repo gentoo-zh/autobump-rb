@@ -25,6 +25,9 @@ module Autobump
       sys-devel/gcc sys-devel/clang sys-devel/llvm llvm-core/clang llvm-core/llvm
       app-office/libreoffice media-gfx/blender dev-db/mongodb dev-db/mariadb dev-db/mysql
     ].freeze
+    GUI_MISSING_LIBRARY = /error while loading shared librar|symbol lookup error|undefined symbol|GLIBC_[0-9.]+.? not found/i
+    GUI_CRASH_STATUSES = [132, 134, 135, 136, 139].freeze
+    GUI_STOP_STATUSES = (GUI_CRASH_STATUSES + [124]).freeze
 
     def initialize(ctx) = (@c = ctx)
 
@@ -67,6 +70,24 @@ module Autobump
           .reject  { |l| l.include?("#{pn}-#{newver}") }
           .flat_map { |l| HEAVY.select { |h| l.include?(h) } }
           .uniq
+    end
+
+    # Pure classification of one GUI launch. The probe itself remains advisory; callers use
+    # the boolean only to choose a truthful summary, never to stop the bump.
+    def self.gui_launch_outcome(bin, status, stderr, fallback_ran)
+      name = File.basename(bin)
+      fallback = fallback_ran ? ' (after --no-sandbox fallback)' : ''
+      if stderr =~ GUI_MISSING_LIBRARY
+        ["#{name} MISSING A LIBRARY at runtime - likely broken#{fallback}", true]
+      elsif GUI_CRASH_STATUSES.include?(status)
+        ["#{name} crashed on start (signal #{status - 128}) - verify (could be headless GL)#{fallback}", true]
+      elsif status == 124
+        ["#{name} ran 15s headless without crashing#{fallback}", false]
+      elsif status == 0
+        ["#{name} exited immediately (status 0) before the 15s timeout#{fallback}", false]
+      else
+        ["#{name} failed to launch headless (exit status #{status.inspect})#{fallback}", true]
+      end
     end
 
     def prebuilt_gate
@@ -184,23 +205,37 @@ module Autobump
       xvfb = spawn('Xvfb', ':99', '-screen', '0', '1280x1024x24',
                    out: File::NULL, err: File::NULL)
       sleep 1
-      res = 'started headless, no crash'
+      res = 'no GUI binaries found'
+      failed = false
+      details = []
       bins(c.pkg).each do |bin|
+        fallback_ran = false
         perr = `DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1 timeout 15 #{bin.shellescape} </dev/null 2>&1 >/dev/null`.scrub; prc = $?.exitstatus
         if perr.include?('no-sandbox')
+          fallback_ran = true
           perr = `DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1 timeout 15 #{bin.shellescape} --no-sandbox --disable-gpu </dev/null 2>&1 >/dev/null`.scrub; prc = $?.exitstatus
         end
-        if perr =~ /error while loading shared librar|symbol lookup error|undefined symbol|GLIBC_[0-9.]+.? not found/i
-          res = "#{File.basename(bin)} MISSING A LIBRARY at runtime - likely broken"; break
-        end
-        case prc
-        when 132, 134, 135, 136, 139 then res = "#{File.basename(bin)} crashed on start (signal #{prc - 128}) - verify (could be headless GL)"; break
-        when 124 then res = 'ran 15s headless without crashing'; break
-        end
+        outcome, launch_failed = self.class.gui_launch_outcome(bin, prc, perr, fallback_ran)
+        details << <<~OUT
+          binary: #{bin}
+          exit status: #{prc.inspect}
+          --no-sandbox fallback: #{fallback_ran ? 'used' : 'not used'}
+          outcome: #{outcome}
+          stderr tail:
+          #{perr.lines.last(20).join}
+        OUT
+        res = outcome if launch_failed || !failed
+        failed ||= launch_failed
+        break if perr =~ GUI_MISSING_LIBRARY || GUI_STOP_STATUSES.include?(prc)
       end
       Process.kill('TERM', xvfb) rescue nil
       Process.wait(xvfb) rescue nil # synchronous teardown so display :99 is free for the next run
+      detail_log = details.empty? ? "no GUI binaries found\n" : details.join("\n")
+      c.evidence.write('gui-probe.log', detail_log)
       Log.log "GUI launch probe: #{res}"
+      # one line per binary in the run log; the stderr tails stay in gui-probe.log so a
+      # multi-binary package cannot bury the sweep's own output
+      details.each { |d| Log.log "GUI launch probe: #{d.lines[0].to_s.chomp} -> #{d.lines[3].to_s.chomp}" }
       c.smoke = "#{c.smoke} | GUI launch probe: #{res}"
     end
 
