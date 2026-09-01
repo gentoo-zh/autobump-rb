@@ -6,6 +6,21 @@ module Autobump
   # An unreachable/slow mirror is transient -> Abort (exit 2) so the sweep retries.
   # A file upstream does not have (404/403) is permanent -> Escalate (exit 3).
   class Distfiles
+    # Local, permanent reasons `ebuild manifest` can fail, as portage words them. Kept narrow:
+    # anything not listed here stays a transient defer, because a wrong guess here turns a slow
+    # mirror into a manual bump.
+    LOCAL_FAILURES = [
+      /Permission denied/,
+      /error sourcing ebuild/,
+      /No space left on device/,
+      /command not found/
+    ].freeze
+
+    # The offending line, or nil when nothing local went wrong.
+    def self.local_failure(out)
+      out.lines.map(&:chomp).reverse.find { |l| LOCAL_FAILURES.any? { |re| l =~ re } }&.strip
+    end
+
     def initialize(ctx) = (@c = ctx)
     def run
       c = @c; cfg = c.cfg
@@ -44,6 +59,12 @@ module Autobump
           if out =~ /ERROR 40[34]:/ || out =~ /\b40[34]\b[^\n]*\b(Not Found|Forbidden|File not found)\b/i
             raise Escalate.new("upstream distfile for #{c.newver} is missing (404/403), not a slow mirror",
                                c.evidence.dir)
+          end
+          # not every other failure is transient: an unreadable ebuild, a missing eclass or a
+          # full disk never fixes itself, and deferring one files "will retry automatically"
+          # every sweep while the real line sits in a run log nobody opens.
+          if (local = Distfiles.local_failure(out))
+            raise Escalate.new("fetch/manifest for #{c.newver} failed locally: #{local}", c.evidence.dir)
           end
           raise Abort, "fetch/manifest for #{c.newver} failed (mirror unreachable or too slow)"
         end

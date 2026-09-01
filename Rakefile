@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-task default: %i[syntax decisions pr_body heavy_dep keep_old payload_diff rewrite gui_probe build_dispatch]
+task default: %i[syntax decisions pr_body heavy_dep keep_old payload_diff rewrite gui_probe build_dispatch fetch_failure]
 
 desc 'ruby -c on all sources'
 task :syntax do
@@ -44,4 +44,9 @@ end
 desc 'build-test payload/install dispatch (hermetic)'
 task :build_dispatch do
   sh 'ruby test/build_dispatch.rb'
+end
+
+desc 'fetch/manifest local-failure classification (hermetic)'
+task :fetch_failure do
+  sh 'ruby test/fetch_failure.rb'
 end
