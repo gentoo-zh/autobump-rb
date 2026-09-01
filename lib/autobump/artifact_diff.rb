@@ -59,38 +59,56 @@ module Autobump
     def self.fold_benign(removed, added, old_pv, newver)
       real_removed = removed.reject { |p| added.include?(p.gsub(old_pv, newver)) }
       real_added   = added.reject   { |p| removed.include?(p.gsub(newver, old_pv)) }
+      churned = 0
 
+      # (2) a content-hash rename. A lowercase word is a name, not a hash: require a digit or
+      #     mixed case, so a renamed `org.example.desktop` stays structural while
+      #     `kernel.C5XtPPRo.js` folds. Hash-bearing additions fold on their own -- an
+      #     addition cannot escalate, and folding it keeps the churn count meaningful.
       hashed = lambda do |p|
         run = File.basename(p)[HASH_RUN]
-        # a lowercase word is a name, not a hash: require a digit or mixed case, so a renamed
-        # `org.example.desktop` stays structural while `kernel.C5XtPPRo.js` folds.
         !run.nil? && (run.match?(/\d/) || (run.match?(/[a-z]/) && run.match?(/[A-Z]/)))
       end
-      hash_key = ->(p) { "#{File.dirname(p)}/#{File.basename(p).sub(HASH_RUN, VER_HOLE)}" }
-      rm_by_hash_key = real_removed.select(&hashed).group_by(&hash_key)
-      ad_by_hash_key = real_added.select(&hashed).group_by(&hash_key)
-      paired_hashes = rm_by_hash_key.keys.select do |k|
-        rm_by_hash_key[k].size == 1 && ad_by_hash_key[k]&.size == 1
-      end.to_h { |k| [k, true] }
-      churned = real_added.count(&hashed) + paired_hashes.size
-      real_removed = real_removed.reject do |p|
-        hashed.call(p) && paired_hashes[hash_key.call(p)]
-      end
-      real_added = real_added.reject(&hashed)
+      real_removed, real_added, folded =
+        fold_pairs(real_removed, real_added, drop_added: true, candidate: hashed,
+                   key: ->(p) { "#{File.dirname(p)}/#{File.basename(p).sub(HASH_RUN, VER_HOLE)}" })
+      churned += folded
 
-      key = ->(p) { "#{File.dirname(p)}/#{File.basename(p).gsub(/\d+(?:\.\d+)+/, VER_HOLE)}" }
-      rm_by_key = real_removed.group_by(&key)
-      ad_by_key = real_added.group_by(&key)
-      paired = rm_by_key.keys.select { |k| rm_by_key[k].size == 1 && ad_by_key[k]&.size == 1 }
-                        .to_h { |k| [k, true] }
-      unless paired.empty?
-        churned += real_removed.count { |p| paired[key.call(p)] } +
-                   real_added.count { |p| paired[key.call(p)] }
-        real_removed = real_removed.reject { |p| paired[key.call(p)] }
-        real_added   = real_added.reject { |p| paired[key.call(p)] }
-      end
+      # (3) an independently-versioned bundled artifact: jetbrains-toolbox moves
+      #     bin/lib/agent-client-0.8.6635.jar to 0.8.6806 while the package goes
+      #     3.6.2.85969 -> 3.6.3.86383, so (1) cannot pair it by the package version.
+      real_removed, real_added, folded =
+        fold_pairs(real_removed, real_added, candidate: ->(_p) { true },
+                   key: ->(p) { "#{File.dirname(p)}/#{File.basename(p).gsub(/\d+(?:\.\d+)+/, VER_HOLE)}" })
+      churned += folded
+
+      # (4) a renumbered bundler chunk: app-editors/cursor moved dist/657.js to dist/61.js and
+      #     app-office/siyuan-bin stage/build/export/805.js to 806.js. Narrow on purpose -- the
+      #     whole basename must be an integer and the extension a script or style one, so a
+      #     dropped icon16.png next to an added icon32.png stays structural.
+      real_removed, real_added, folded =
+        fold_pairs(real_removed, real_added,
+                   candidate: ->(p) { File.basename(p) =~ /\A\d+\.(js|mjs|cjs|css)\z/ },
+                   key: ->(p) { "#{File.dirname(p)}/#{VER_HOLE}#{File.extname(p)}" })
+      churned += folded
 
       [real_removed, real_added, churned]
+    end
+
+    # The shared safety rule behind (2), (3) and (4): a removal folds only when exactly one
+    # addition carries the same key, so an unreplaced or ambiguous removal always survives.
+    # `drop_added` additionally discards every candidate addition, which only rule (2) wants.
+    # Returns [removed, added, folded_count].
+    def self.fold_pairs(removed, added, candidate:, key:, drop_added: false)
+      rm_by_key = removed.select(&candidate).group_by(&key)
+      ad_by_key = added.select(&candidate).group_by(&key)
+      paired = rm_by_key.keys.select { |k| rm_by_key[k].size == 1 && ad_by_key[k]&.size == 1 }
+                        .to_h { |k| [k, true] }
+      folds = ->(p) { candidate.call(p) && paired[key.call(p)] }
+      kept_removed = removed.reject(&folds)
+      kept_added = drop_added ? added.reject(&candidate) : added.reject(&folds)
+      [kept_removed, kept_added,
+       (removed.size - kept_removed.size) + (added.size - kept_added.size)]
     end
 
     def initialize(ctx) = (@c = ctx)

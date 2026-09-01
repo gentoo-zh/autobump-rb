@@ -59,11 +59,8 @@ stage_added = %w[
   opt/SiYuan/resources/stage/build/export/806.js
 ]
 rm, ad, ch = F.call(stage_removed, stage_added, '1', '2')
-check 'stage build hash rehashes fold but numeric chunk stays structural',
-      [rm, ad],
-      [%w[opt/SiYuan/resources/stage/build/export/805.js],
-       %w[opt/SiYuan/resources/stage/build/export/806.js]]
-check 'stage build hash rehashes count as churn', ch, 4
+check 'stage build rehashes and the renumbered chunk all fold', [rm, ad], [[], []]
+check 'stage build churn counts every folded path', ch, 6
 
 rm, ad, = F.call(
   %w[usr/lib/claude-desktop/resources/ion-dist/_frame-rt/_runtime/kernel.C5XtPPRo.js],
@@ -126,6 +123,29 @@ check 'different basename stays structural', [rm, ad], [%w[bin/lib/alpha-1.0.0.j
 
 # --- no-change and empty input ---------------------------------------------------------
 check 'empty diff -> empty', F.call([], [], '1', '2'), [[], [], 0]
+
+
+# --- rule 4: renumbered bundler chunk ----------------------------------------------------
+# webpack renumbers chunks every build: cursor moved dist/657.js to dist/61.js, siyuan
+# stage/build/export/805.js to 806.js.
+rm, ad, ch = F.call(%w[usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/657.js],
+                    %w[usr/share/cursor/resources/app/extensions/cursor-agent-host/dist/61.js], '1', '2')
+check 'renumbered chunk folds', [rm, ad], [[], []]
+check 'renumbered chunk counts as churn', ch, 2
+
+rm, = F.call(%w[opt/app/build/export/805.js], %w[opt/app/build/export/806.js opt/app/build/export/807.js], '1', '2')
+check 'ambiguous chunk renumber stays structural', rm, %w[opt/app/build/export/805.js]
+
+rm, = F.call(%w[usr/share/icons/hicolor/16x16/apps/icon16.png],
+             %w[usr/share/icons/hicolor/32x32/apps/icon32.png], '1', '2')
+check 'a dropped icon size is not a chunk renumber', rm,
+      %w[usr/share/icons/hicolor/16x16/apps/icon16.png]
+
+rm, = F.call(%w[opt/app/dist/657.js], %w[opt/app/other/61.js], '1', '2')
+check 'chunk renumber across directories stays structural', rm, %w[opt/app/dist/657.js]
+
+rm, = F.call(%w[opt/app/dist/657.bin], %w[opt/app/dist/61.bin], '1', '2')
+check 'a numeric basename with another extension stays structural', rm, %w[opt/app/dist/657.bin]
 
 puts '----'
 if $fail.zero?
