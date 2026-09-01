@@ -9,10 +9,10 @@ module Autobump
   class Classify
     Result = Struct.new(:escalations, :multiarch, :gui, :keywords_line, keyword_init: true)
 
-    def initialize(cfg:, pkg:, old_ebuild:, old_pv:, newver:, evidence:)
+    def initialize(cfg:, pkg:, old_ebuild:, old_pv:, newver:, evidence:, rewrite_var: nil)
       @cfg, @pkg, @old_ebuild = cfg, pkg, old_ebuild
       @cat, @pn = pkg.split('/', 2)
-      @old_pv, @newver, @ev = old_pv, newver, evidence
+      @old_pv, @newver, @ev, @rewrite_var = old_pv, newver, evidence, rewrite_var
       # tolerate non-UTF-8 bytes: scrub so a later regex/scan can't raise an uncaught
       # ArgumentError (invalid byte sequence) that would exit 1, off the 0/2/3 contract.
       @text = File.read(old_ebuild, encoding: 'UTF-8').scrub
@@ -21,6 +21,7 @@ module Autobump
 
     def run
       esc = []
+      (rw = rewrite_assignment) and esc << rw
       esc << "target looks like a prerelease: #{@newver}" if prerelease?
       (m = major_jump)        and esc << m
       (nn = not_newer)        and esc << nn
@@ -46,6 +47,13 @@ module Autobump
     end
 
     private
+    # This is deliberately the same parser Distfiles uses to make the actual edit:
+    # classification rejects precisely the input the later rewrite would refuse, before
+    # preflight creates a branch.
+    def rewrite_assignment
+      return unless @rewrite_var
+      Rewrite.rewrite_assignment(@text, @rewrite_var, Rewrite::VALIDATION_VALUE).reason
+    end
 
     def prerelease?
       return false unless @newver =~ /(alpha|beta|rc[0-9]*|pre|nightly|dev)([._-]|$)/i
@@ -112,7 +120,12 @@ module Autobump
       # in an INLINE comment must not escalate. Apply this masking to source_pin ONLY --
       # pins() below strips whole comment lines but keeps inline ones on purpose (it only
       # records evidence, never escalates), so it must not get this stricter masking.
-      return nil unless @text.lines.any? { |l| l.sub(/#.*/, '') =~ /_COMMIT=|_TAG=/ }
+      # a pin the rewrite spec updates every bump is not a stale pin: exclude that one
+      # variable, and escalate only if some OTHER pin is left unhandled.
+      pinned = @text.lines.map { |l| l.sub(/#.*/, '') }
+                    .select { |l| l =~ /_COMMIT=|_TAG=/ }
+                    .reject { |l| @rewrite_var && l =~ /\A[[:space:]]*#{Regexp.escape(@rewrite_var.to_s)}=/ }
+      return nil if pinned.empty?
       return nil if @text.scan(%r{https://[^ "\r\n]+}).any? { |u| u =~ /(-deps|-vendor|-crates|node_modules)\.tar\./ }
       'ebuild pins a source commit/tag but has no per-version vendor artifact - verify the pin was bumped for the new version, do not version-copy'
     end

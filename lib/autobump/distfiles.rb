@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 require 'fileutils'
+require 'open-uri'
 module Autobump
   # Stage 4: fetch old artifacts, create the new ebuild, fetch + manifest.
   # An unreachable/slow mirror is transient -> Abort (exit 2) so the sweep retries.
@@ -28,6 +29,7 @@ module Autobump
         rescue SystemCallError => e
           raise Abort, "could not create new ebuild: #{e.message}"
         end
+        rewrite(neweb) if c.rewrite_var
         out, ok = c.sh('ebuild', neweb, 'manifest', sudo: true, timeout: cfg.op_timeout)
         c.evidence.write('fetch.log', out)
         unless ok
@@ -48,6 +50,55 @@ module Autobump
         system(*[cfg.sudo, 'chown', "#{`id -un`.strip}:#{`id -gn`.strip}", 'Manifest'].reject { |x| x.nil? || x.empty? })
       end
       Log.ok 'distfiles fetched, Manifest regenerated'
+    end
+
+    private
+
+    # Fetch and apply the optional opaque token only after copying the selected ebuild.
+    # The rewritten SRC_URI is therefore what Manifest fetches; a wrong token fails at
+    # that fetch gate, while a source/vendor mismatch that still fetches reaches BuildTest.
+    def rewrite(neweb)
+      c = @c
+      url = Rewrite.expand_url(c.rewrite_url, c.newver)
+      document = begin
+        URI.open(url, open_timeout: c.cfg.op_timeout, read_timeout: c.cfg.op_timeout, &:read)
+      rescue StandardError => e
+        raise Abort, "could not fetch rewrite source #{url}: #{e.message}"
+      end
+
+      value = Rewrite.extract_value(document, regex: Rewrite.expand_regex(c.rewrite_regex, c.newver))
+      unless value
+        raise Abort, "rewrite source #{url} gave no non-empty capture group 1 for " \
+                     "#{c.rewrite_regex.inspect} (the release document may not be published yet)"
+      end
+
+      text = begin
+        File.read(neweb, encoding: 'UTF-8').scrub
+      rescue SystemCallError, ArgumentError => e
+        raise Abort, "could not read copied ebuild for rewrite from #{url}: #{e.message}"
+      end
+      result = Rewrite.rewrite_assignment(text, c.rewrite_var, value)
+      unless result.text
+        raise Abort, "rewrite source #{url} could not rewrite #{c.rewrite_var}: #{result.reason}"
+      end
+
+      c.evidence.write('rewrite.txt',
+                       "variable=#{c.rewrite_var}\nold_value=#{result.old_value}\n" \
+                       "new_value=#{value}\nsource_url=#{url}\n")
+      unless result.changed
+        # source_pin no longer guards this variable, so an unchanged token is nobody's
+        # responsibility any more: the regex selected the previous release's value, or
+        # upstream genuinely reused it. Either way a human decides, not the copy.
+        raise Escalate.new("rewrite value for #{c.rewrite_var} is unchanged at #{result.old_value} " \
+                           "for #{c.newver}; check the selector or bump by hand", c.evidence.dir)
+      end
+
+      begin
+        File.write(neweb, result.text, encoding: 'UTF-8')
+      rescue SystemCallError, ArgumentError => e
+        raise Abort, "could not write copied ebuild for rewrite from #{url}: #{e.message}"
+      end
+      Log.ok "rewrote #{c.rewrite_var} from #{url}"
     end
   end
 end
