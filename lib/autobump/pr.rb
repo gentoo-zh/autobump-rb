@@ -64,6 +64,7 @@ module Autobump
                '- [x] emerge build + install',
                '- [x] `pkgcheck scan --commits --net` clean',
                "- smoke: #{c.smoke}"]
+      lines << rewrite_line if rewrite_line
       lines += diff_lines
       meta = []
       meta << "Closes ##{c.issue}" if c.issue
@@ -71,6 +72,15 @@ module Autobump
       meta << "cc #{ccs}" unless ccs.empty?
       lines += ['', meta.join(' · ')] unless meta.empty?
       lines.join("\n") + "\n"
+    end
+
+    # A rewritten variable is an opaque token a reviewer cannot check by eye, so the PR
+    # carries where it came from and what it replaced.
+    def rewrite_line
+      f = @c.evidence.path('rewrite.txt')
+      return nil unless File.exist?(f)
+      v = File.read(f).lines.to_h { |l| l.chomp.split('=', 2) }
+      "- rewrote `#{v['variable']}` #{v['old_value']} → #{v['new_value']} from #{v['source_url']}"
     end
 
     # The old→new diff. Both added and removed reflect the change, so show both in a collapsed

@@ -45,6 +45,19 @@ def check(name, body, must: [], absent: [])
   end
 end
 
+# 0. a rewritten variable: the reviewer gets the source and the old->new token
+check 'payload: rewritten variable is shown with its source',
+      render(ctx(ev_with('r', 'rewrite.txt' => "variable=MY_COMMIT\nold_value=2ba48ff3\n" \
+                                               "new_value=280eca29\nsource_url=https://cursor.com/api/download\n"),
+                 pkg: 'app-editors/cursor', old_pvr: '3.18.9', newver: '3.18.25', old_pv: '3.18.9',
+                 payload: true, smoke: 'installed')),
+      must: ['- rewrote `MY_COMMIT` 2ba48ff3 → 280eca29 from https://cursor.com/api/download']
+
+check 'a bump with no rewrite says nothing about one',
+      render(ctx(ev_with('r2'), pkg: 'net-misc/tsshd', old_pvr: '0.1.8', newver: '0.1.9',
+                 old_pv: '0.1.8', payload: false, smoke: 'installed')),
+      absent: ['rewrote']
+
 # A. source bump, build surface unchanged -> one plain line, no fold
 check 'source: no surface change',
       render(ctx(ev_with('a', 'surface-added.txt' => '', 'surface-removed.txt' => ''),

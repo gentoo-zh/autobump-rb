@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-task default: %i[syntax decisions pr_body heavy_dep keep_old payload_diff gui_probe build_dispatch]
+task default: %i[syntax decisions pr_body heavy_dep keep_old payload_diff rewrite gui_probe build_dispatch]
 
 desc 'ruby -c on all sources'
 task :syntax do
@@ -29,6 +29,11 @@ end
 desc 'payload path-diff fold rules (hermetic)'
 task :payload_diff do
   sh 'ruby test/payload_diff.rb'
+end
+
+desc 'opaque upstream-token rewrite parsing and refusal rules (hermetic)'
+task :rewrite do
+  sh 'ruby test/rewrite.rb'
 end
 
 desc 'GUI launch outcome classification (hermetic)'

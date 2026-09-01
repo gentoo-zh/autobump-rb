@@ -2,6 +2,7 @@
 require_relative 'autobump/config'
 require_relative 'autobump/evidence'
 require_relative 'autobump/runtime'
+require_relative 'autobump/rewrite'
 require_relative 'autobump/locate'
 require_relative 'autobump/classify'
 require_relative 'autobump/issue'
