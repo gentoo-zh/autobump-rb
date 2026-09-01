@@ -2,7 +2,7 @@
 require 'shellwords'
 module Autobump
   # Stage 6: build test.
-  #  - Prebuilt payload: `ebuild install` (no deps) + QA gate (ignore the
+  #  - Prebuilt payload without --install: `ebuild install` (no deps) + QA gate (ignore the
   #    unresolved-soname notice that resolves once RDEPEND is installed).
   #  - Source: only build-tested with --install (surface diff otherwise).
   #  - --install: copy into the live overlay if separate, accept ~amd64 overlay-wide,
@@ -34,7 +34,7 @@ module Autobump
     def run
       c = @c
       c.smoke = 'not run (use --install)'
-      if c.payload
+      if c.payload && !c.install
         prebuilt_gate
       elsif !c.install
         Log.log 'source package: not build-tested without --install (surface-diff only); --pr implies --install'
