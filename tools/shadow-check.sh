@@ -27,7 +27,13 @@ for n in "${issues[@]}"; do
     pkg=$(sed -nE 's/^\[nvchecker\] ([a-z0-9-]+\/[A-Za-z0-9_+-]+) can be bump to .*/\1/p' <<<"$title")
     ver=$(sed -nE 's/.* can be bump to ([A-Za-z0-9._+-]+)$/\1/p' <<<"$title")
     if [ -z "$pkg" ] || [ -z "$ver" ]; then printf 'SKIP #%-6s (unparsable title)\n' "$n"; continue; fi
-    ruby "$ENGINE" "$pkg" "$ver" --check >/dev/null 2>&1; rc=$?
+    # the sweep passes the overlay's per-package flags (retention, variable rewrite); without
+    # them a package that needs a rewrite is counted as an escalation the sweep never sees
+    args=()
+    if [ -n "${AUTOBUMP_REPO:-}" ] && [ -x "$AUTOBUMP_REPO/scripts/autobump-args.py" ]; then
+        mapfile -t args < <(cd "$AUTOBUMP_REPO" && python3 scripts/autobump-args.py "$pkg" 2>/dev/null)
+    fi
+    ruby "$ENGINE" "$pkg" "$ver" --check "${args[@]}" >/dev/null 2>&1; rc=$?
     case "$rc" in 0) mech=$((mech+1));; 3) esc=$((esc+1));; 2) defer=$((defer+1));; esac
     printf '#%-6s %-34s %-14s %s\n' "$n" "$pkg" "$ver" "$(label "$rc")"
 done

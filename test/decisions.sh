@@ -32,7 +32,7 @@ while IFS=$'\t' read -r pkg ver want_exit want_notes; do
         while IFS= read -r p; do
             [ -n "$p" ] || continue
             grep -qF "$p" <<<"$out" || err="${err:+$err; }missing note: $p"
-        done < <(printf '%s' "$want_notes" | sed 's/||/\n/g')
+        done < <(printf '%s\n' "$want_notes" | sed 's/||/\n/g')
     fi
 
     if [ -z "$err" ]; then
@@ -45,4 +45,6 @@ while IFS=$'\t' read -r pkg ver want_exit want_notes; do
 done < "$TABLE"
 echo "----"
 echo "decisions: $pass passed, $fail failed"
+# an empty or missing table would otherwise report a clean run over nothing
+[ "$pass" -gt 0 ] || { echo "decisions: the table produced no cases ($TABLE)" >&2; exit 1; }
 [ "$fail" -eq 0 ]
