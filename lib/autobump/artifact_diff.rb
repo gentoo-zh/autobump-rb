@@ -32,7 +32,8 @@ module Autobump
 
     # Placeholder for the version or hash run blanked out by pairing rules (2) and (3).
     VER_HOLE = '<v>'
-    HASH_RUN = /(?<=[-.])[A-Za-z0-9_-]{7,}(?=\.[A-Za-z0-9]+\z)/
+    # the run sits before the final extension, or before a sourcemap/licence companion of it
+    HASH_RUN = /(?<=[-.])[A-Za-z0-9_-]{7,}(?=\.[A-Za-z0-9]+(?:\.(?:map|LICENSE\.txt))?\z)/
 
     # Fold benign churn out of a payload path diff so only structural add/remove is left.
     # Pure -- no filesystem, no Context -- so test/payload_diff.rb can pin every rule.
@@ -82,15 +83,29 @@ module Autobump
                    key: ->(p) { "#{File.dirname(p)}/#{File.basename(p).gsub(/\d+(?:\.\d+)+/, VER_HOLE)}" })
       churned += folded
 
-      # (4) a renumbered bundler chunk: app-editors/cursor moved dist/657.js to dist/61.js and
-      #     app-office/siyuan-bin stage/build/export/805.js to 806.js. Narrow on purpose -- the
-      #     whole basename must be an integer and the extension a script or style one, so a
-      #     dropped icon16.png next to an added icon32.png stays structural.
-      real_removed, real_added, folded =
-        fold_pairs(real_removed, real_added,
-                   candidate: ->(p) { File.basename(p) =~ /\A\d+\.(js|mjs|cjs|css)\z/ },
-                   key: ->(p) { "#{File.dirname(p)}/#{VER_HOLE}#{File.extname(p)}" })
-      churned += folded
+      # (4) a renumbered bundler chunk. Webpack numbers chunks per build, so a rebuilt
+      #     bundle renames the whole directory at once and the sets never pair one to one:
+      #     cursor's cursor-agent-host/dist drops 20 chunks and adds 200. Fold a directory's
+      #     chunks while that directory came back at least as large, so a dist/ that emptied
+      #     out or shrank is still a removal. The basename must be an integer and the extension
+      #     a script or style one, so a dropped icon16.png next to an added icon32.png stays
+      #     structural.
+      chunk = ->(p) { File.basename(p).match?(/\A\d+\.(js|mjs|cjs|css)(\.map|\.LICENSE\.txt)?\z/) }
+      chunks_per_dir = lambda do |paths|
+        paths.select(&chunk).group_by { |p| File.dirname(p) }.transform_values(&:size)
+      end
+      gained = chunks_per_dir.call(real_added)
+      lost = chunks_per_dir.call(real_removed)
+      # a rebuild renumbers, it does not net-delete: a directory that came back smaller lost
+      # something, and that is what a maintainer has to see
+      # a rebuild renames what was there: a directory that only gained chunks did not rebuild,
+      # and one that came back smaller lost something a maintainer has to see
+      rebuilt_dirs = gained.select { |dir, n| lost.fetch(dir, 0).positive? && n >= lost[dir] }.keys
+      renumbered = ->(p) { chunk.call(p) && rebuilt_dirs.include?(File.dirname(p)) }
+      kept_removed = real_removed.reject(&renumbered)
+      kept_added = real_added.reject(&renumbered)
+      churned += (real_removed.size - kept_removed.size) + (real_added.size - kept_added.size)
+      real_removed, real_added = kept_removed, kept_added
 
       [real_removed, real_added, churned]
     end
