@@ -151,6 +151,14 @@ check 'another unhandled pin still escalates',
       classify_notes(pinned_ebuild + %(OTHER_COMMIT="cafe"\n), 'MY_COMMIT')
         .any? { |n| n.include?('pins a source commit/tag') }, true
 
+# a configured pattern is repository input: a backreference defeats Ruby's memoization and
+# would otherwise spin until the job ceiling
+started = Time.now
+check 'a backtracking pattern gives up instead of hanging',
+      Autobump::Rewrite.extract_value('a' * 44 + '!', regex: '(a+)+\\1$'), nil
+check 'and it gives up within its own timeout',
+      (Time.now - started) < Autobump::Rewrite::EXTRACT_TIMEOUT + 3, true
+
 puts '----'
 if $fail.zero?
   puts 'rewrite: all passed'

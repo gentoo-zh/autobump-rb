@@ -36,6 +36,47 @@ check 'a 404 is not local either',
       F.call("ERROR 404: Not Found.\n!!! Couldn't download 'pkg-1.tar.gz'.\n"), nil
 check 'empty output is not local', F.call(''), nil
 
+MIRRORS = 'https://distfiles.gentoo.org/distfiles https://mirror.example/gentoo'
+
+# portage probes the mirrors first, and a fresh distfile is never on them
+mirror_then_timeout = <<~LOG
+  >>> Downloading 'https://distfiles.gentoo.org/distfiles/23/pkg-1.0.tar.gz'
+  2026-09-03 10:00:00 ERROR 404: Not Found.
+  >>> Downloading 'https://upstream.example/pkg-1.0.tar.gz'
+  Connecting to upstream.example|10.255.255.1|:443... failed: Connection timed out.
+LOG
+check 'a mirror 404 with a transient upstream is not a missing distfile',
+      Autobump::Distfiles.upstream_missing?(mirror_then_timeout, MIRRORS), false
+
+really_gone = <<~LOG
+  >>> Downloading 'https://distfiles.gentoo.org/distfiles/23/pkg-2.0.tar.gz'
+  2026-09-03 10:00:00 ERROR 404: Not Found.
+  >>> Downloading 'https://upstream.example/pkg-2.0.tar.gz'
+  2026-09-03 10:00:01 ERROR 404: Not Found.
+LOG
+check 'upstream answering 404 is a missing distfile',
+      Autobump::Distfiles.upstream_missing?(really_gone, MIRRORS), true
+
+forbidden = really_gone.sub('10:00:01 ERROR 404: Not Found.', '10:00:01 ERROR 403: Forbidden.')
+check '403 counts as missing too', Autobump::Distfiles.upstream_missing?(forbidden, MIRRORS), true
+
+check 'a log with no per-URI structure falls back to the whole text',
+      Autobump::Distfiles.upstream_missing?("ERROR 404: Not Found.\n", MIRRORS), true
+
+check 'an empty mirror list leaves every URI upstream',
+      Autobump::Distfiles.upstream_missing?(mirror_then_timeout, ''), true
+
+retried = <<~LOG
+  >>> Downloading 'https://up.example/a.tar.xz'
+  ERROR 404: Not Found.
+  >>> Downloading 'https://up.example/a.tar.xz'
+  2026-09-03 10:00:01 (1.00 MB/s) - 'a.tar.xz' saved [1/1]
+  >>> Downloading 'https://up.example/b.tar.xz'
+  Connection timed out.
+LOG
+check 'a URI portage came back to and fetched is not missing',
+      Autobump::Distfiles.upstream_missing?(retried, MIRRORS), false
+
 puts '----'
 puts "fetch_failure: #{$fail.zero? ? 'all passed' : "#{$fail} failed"}"
 exit($fail.zero? ? 0 : 1)
