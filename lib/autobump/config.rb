@@ -32,6 +32,19 @@ module Autobump
         (File.realpath(@live_overlay) rescue nil) != (File.realpath(@repo) rescue nil)
     end
 
+    # The remote whose fetch URL IS owner/repo. Substring matching would take a mirror
+    # (".../gentoo-zh/overlay-mirror.git") for the canonical repo and sync master from it.
+    def self.remote_named(remote_v, upstream_repo)
+      want = upstream_repo.downcase
+      remote_v.lines.each do |line|
+        name, url, kind = line.split
+        next unless kind == '(fetch)' && url
+        slug = url.sub(/\.git\z/, '').sub(%r{/\z}, '').downcase[%r{([^/:]+/[^/]+)\z}, 1]
+        return name if slug == want
+      end
+      nil
+    end
+
     # Pick the CANONICAL remote to sync master from (never blindly `origin`).
     # Honour AUTOBUMP_SYNC_REMOTE, else the remote whose URL is upstream_repo,
     # else add a throwaway `autobump-canonical`. Memoized; called at preflight
@@ -39,8 +52,7 @@ module Autobump
     def sync_remote
       @sync_remote ||= begin
         r = @sync_remote_env
-        r ||= `git -C #{@repo.shellescape} remote -v`.lines.find { |l|
-          l.include?(@upstream_repo) && l.include?('(fetch)') }&.split&.first
+        r ||= Config.remote_named(`git -C #{@repo.shellescape} remote -v`, @upstream_repo)
         unless r
           url = "https://github.com/#{@upstream_repo}.git"
           have = `git -C #{@repo.shellescape} remote`.lines.map(&:strip).include?('autobump-canonical')

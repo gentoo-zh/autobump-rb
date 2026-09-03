@@ -114,18 +114,26 @@ module Autobump
         when '--rewrite-var' then o[:rewrite_var] = option_value(args, a)
         when '--rewrite-url' then o[:rewrite_url] = option_value(args, a)
         when '--rewrite-regex' then o[:rewrite_regex] = option_value(args, a)
-        when %r{/} then o[:pkg] = a                                  # bash */*
-        when /\A[0-9].*\.[0-9]/ then o[:newver] = a                  # bash [0-9]*.[0-9]*
+        when %r{/}
+          die("two packages given: #{o[:pkg]} and #{a}") if o[:pkg]
+          o[:pkg] = a                                                # bash */*
+        when /\A[0-9].*\.[0-9]/                                      # bash [0-9]*.[0-9]*
+          die("two target versions given: #{o[:newver]} and #{a}") if o[:newver]
+          o[:newver] = a
         when /\A[0-9]/ # bash [0-9]* (any digit-led token: _pre/_beta/date versions)
           if o[:pkg].nil?
             die("issue must be a number: #{a}") unless a =~ /\A[0-9]+\z/ # the issue token is a bare issue number
             o[:issue] = a
           else
+            die("two target versions given: #{o[:newver]} and #{a}") if o[:newver]
             o[:newver] = a
           end
         else die("unknown arg: #{a}")
         end
       end
+      # --diff-only stops after the diff, so asking for a PR too would report a bump that
+      # was never built, committed or opened
+      die('--diff-only and --pr ask for different runs') if o[:diff_only] && o[:pr]
       validate_rewrite_spec(o)
       o
     end

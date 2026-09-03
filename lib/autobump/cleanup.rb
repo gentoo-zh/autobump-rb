@@ -10,7 +10,9 @@ module Autobump
       quiet = { out: File::NULL, err: File::NULL } # array form -> no shell, no quoting needed
       g = ->(*args) { system('git', '-C', repo, *args, **quiet) }
       g.('reset', '-q', '--', ctx.pkgdir) if ctx.pkgdir
-      File.delete(ctx.new_ebuild) if ctx.new_ebuild && File.exist?(ctx.new_ebuild)
+      # only the copy this run made: the path can also hold a maintainer's draft, or another
+      # run's work in the same checkout
+      File.delete(ctx.new_ebuild) if ctx.copied_ebuild && File.exist?(ctx.new_ebuild)
       g.('checkout', '-q', '--', ctx.pkgdir) if ctx.pkgdir
       system('git', '-C', repo, 'checkout', '-q', 'master') # let this step's stderr show
       g.('branch', '-qD', ctx.branch) if ctx.branch
