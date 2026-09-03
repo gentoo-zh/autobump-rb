@@ -12,6 +12,24 @@ module Autobump
       /<\/maintainer>/{print e "\t" n}
     AWK
 
+    QUERY_TRIES = 3
+
+    # The PR numbers open for this head, or [nil, why] when gh could not answer. A blip in the
+    # API is not worth a bump that is already built and committed, so ask again before giving up.
+    def self.open_pr_for(upstream_repo, head)
+      last = ''
+      QUERY_TRIES.times do |attempt|
+        out = IO.popen(['gh', 'pr', 'list', '--repo', upstream_repo, '--state', 'open',
+                        '--head', head, '--json', 'number', '--jq', '.[].number'],
+                       err: %i[child out], &:read)
+        return [out, nil] if $?&.success?
+
+        last = out.to_s.strip.lines.last.to_s.strip
+        sleep(2 * (attempt + 1))
+      end
+      [nil, last.empty? ? 'gh failed' : last]
+    end
+
     # A multi-arch bump is opened as a draft: only amd64 was built here, so the other
     # keywords are untested until a human says otherwise.
     def self.create_args(repo:, head:, title:, body_file:, multiarch:)
@@ -34,12 +52,10 @@ module Autobump
       head = owner == cfg.upstream_repo.split('/').first ? c.branch : "#{owner}:#{c.branch}"
       # a reviewer may have pushed fixups onto an open PR for this branch; do not clobber.
       # Ask about this branch (--head), not about the newest 30 open PRs gh lists by default.
-      open = IO.popen(['gh', 'pr', 'list', '--repo', cfg.upstream_repo, '--state', 'open',
-                       '--head', head, '--json', 'number', '--jq', '.[].number'],
-                      err: File::NULL, &:read)
+      open, reason = PR.open_pr_for(cfg.upstream_repo, head)
       # a failed query proves nothing; pushing on it would force over the branch it was
       # supposed to protect
-      raise Abort, "cannot tell whether #{c.branch} has an open PR (gh failed); not pushing" unless $?&.success?
+      raise Abort, "cannot tell whether #{c.branch} has an open PR: #{reason}; not pushing" if open.nil?
       unless open.strip.empty?
         Log.log "an open PR already exists for #{c.branch} - not pushing (would clobber review)"
         return
