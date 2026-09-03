@@ -74,11 +74,10 @@ module Autobump
     # version must sort strictly newer. a same-major downgrade, or an nvchecker
     # version-format reparse that yields a lower version, still fetches + builds
     # against the older source, so nothing downstream catches it -- it would open a
-    # version-downgrade PR that looks like a routine bump. sort -V is the same
-    # comparator locate uses to pick the current ebuild.
+    # version-downgrade PR that looks like a routine bump.
     def not_newer
-      top = `printf '%s\\n%s\\n' #{@old_pv.shellescape} #{@newver.shellescape} | sort -V | tail -1`.strip
-      "target version is not newer than current: #{@old_pv} -> #{@newver}" unless top == @newver
+      newer = Version.newer?(@newver, @old_pv)
+      "target version is not newer than current: #{@old_pv} -> #{@newver}" unless newer
     end
 
     # two release lines in one package dir, separated by SLOT: games-arcade/osu-lazer-bin keeps a
@@ -137,6 +136,12 @@ module Autobump
       return nil unless url
       t = url.gsub('${P}', "#{@pn}-#{@newver}").gsub('${PV}', @newver).gsub('${PN}', @pn)
       t = t.gsub(Regexp.new(@old_pv.gsub('.', '\\.')), @newver)
+      # only ${P}/${PV}/${PN} are substituted above; a URL built from any other variable
+      # (${MY_PN}, ${MY_PV}) would be curl'd literally and answer 404 for a bundle that exists
+      if t.include?('${')
+        Log.log("deps artifact check skipped (unresolved variable in #{t})")
+        return nil
+      end
       code = `curl -sIL --max-time 30 -o /dev/null -w '%{http_code}' #{t.shellescape} 2>/dev/null`.strip
       code = '000' if code.empty?
       case code

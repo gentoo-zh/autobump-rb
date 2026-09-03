@@ -10,8 +10,7 @@ module Autobump
       @cat, @pn = pkg.split('/', 2)
       pkgdir = File.join(repo, pkg)
       raise "no such package dir: #{pkgdir}" unless Dir.exist?(pkgdir)
-      # quote the dir like bash's `ls "$PKGDIR"/*.ebuild` (protect the path, glob the suffix)
-      @old_ebuild = `ls #{pkgdir.shellescape}/*.ebuild 2>/dev/null | grep -vE -- '-9{4,}' | sort -V | tail -1`.strip
+      @old_ebuild = Version.release_ebuilds(repo, pkgdir).last.to_s
       raise "no release ebuild in #{pkgdir} (live-only package?)" if @old_ebuild.empty?
       @old_pvr = File.basename(@old_ebuild, '.ebuild').sub(/\A#{Regexp.escape(@pn)}-/, '')
       @old_pv  = @old_pvr.sub(/-r[0-9]+\z/, '')
