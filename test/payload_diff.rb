@@ -133,8 +133,25 @@ rm, ad, ch = F.call(%w[usr/share/cursor/resources/app/extensions/cursor-agent-ho
 check 'renumbered chunk folds', [rm, ad], [[], []]
 check 'renumbered chunk counts as churn', ch, 2
 
-rm, = F.call(%w[opt/app/build/export/805.js], %w[opt/app/build/export/806.js opt/app/build/export/807.js], '1', '2')
-check 'ambiguous chunk renumber stays structural', rm, %w[opt/app/build/export/805.js]
+# a rebuilt bundle renames its whole directory at once, so the two sides do not pair
+rm, ad, ch = F.call(%w[opt/app/dist/111.js opt/app/dist/154.js opt/app/dist/154.js.LICENSE.txt],
+                    %w[opt/app/dist/1053.js opt/app/dist/1178.js opt/app/dist/1198.js
+                       opt/app/dist/276.js.LICENSE.txt opt/app/dist/2142.js.map], '1', '2')
+check 'a renumbered chunk set folds whatever the counts', [rm, ad], [[], []]
+check 'the whole set counts as churn', ch, 8
+
+rm, = F.call(%w[opt/app/dist/111.js opt/app/dist/154.js], %w[opt/app/other/1053.js], '1', '2')
+check 'a dist that emptied out stays structural', rm, %w[opt/app/dist/111.js opt/app/dist/154.js]
+
+rm, = F.call(%w[opt/app/dist/111.js opt/app/dist/154.js opt/app/dist/165.js], %w[opt/app/dist/1053.js], '1', '2')
+check 'a dist that came back smaller stays structural', rm,
+      %w[opt/app/dist/111.js opt/app/dist/154.js opt/app/dist/165.js]
+
+# the sourcemap and licence of a hash-renamed asset are the same churn as the asset
+rm, ad, ch = F.call(%w[opt/app/assets/index-A1b2C3d.js opt/app/assets/index-A1b2C3d.js.map],
+                    %w[opt/app/assets/index-Z9y8X7w.js opt/app/assets/index-Z9y8X7w.js.map], '1', '2')
+check 'a hash rename folds with its companions', [rm, ad], [[], []]
+check 'the companions count as churn', ch, 4
 
 rm, = F.call(%w[usr/share/icons/hicolor/16x16/apps/icon16.png],
              %w[usr/share/icons/hicolor/32x32/apps/icon32.png], '1', '2')
@@ -146,6 +163,9 @@ check 'chunk renumber across directories stays structural', rm, %w[opt/app/dist/
 
 rm, = F.call(%w[opt/app/dist/657.bin], %w[opt/app/dist/61.bin], '1', '2')
 check 'a numeric basename with another extension stays structural', rm, %w[opt/app/dist/657.bin]
+
+rm, ad, = F.call([], %w[opt/app/dist/1053.js], '1', '2')
+check 'a chunk that is only added is not a rebuild', [rm, ad], [[], %w[opt/app/dist/1053.js]]
 
 puts '----'
 if $fail.zero?

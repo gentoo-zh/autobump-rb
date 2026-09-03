@@ -21,20 +21,23 @@ module Autobump
     # newest N. portage's own comparator (always present on a Gentoo host) ranks _alpha/_beta/
     # _pre/_rc as OLDER than the release; `sort -V` gets that backwards. Falls back to `sort -V`
     # only if portage's python is somehow unavailable.
-    SORT_BY_VERSION_PY = <<~'PY'
-      import sys, os, functools
-      from portage.versions import vercmp
-      pn = sys.argv[1]; paths = sys.argv[2:]
-      def ver(p): return os.path.basename(p)[len(pn) + 1:-7]  # strip "pn-" prefix and ".ebuild"
-      paths.sort(key=functools.cmp_to_key(lambda a, b: vercmp(ver(a), ver(b)) or 0))
-      sys.stdout.write("\n".join(paths))
-    PY
+    # Portage's order, not `sort -V`: sort -V ranks _alpha/_beta/_pre/_rc above the release, so
+    # it would keep a stale rc and git-rm the newest real release.
     def self.sort_by_version(paths, pn)
-      return paths if paths.size < 2
-      out = IO.popen(['python3', '-c', SORT_BY_VERSION_PY, pn, *paths], err: File::NULL, &:read)
-      return out.split("\n") if $?.success? && !out.strip.empty?
-      # fallback: the engine's usual sort -V ordering (correct except for _pre/_rc prereleases)
-      IO.popen(['sort', '-V'], 'r+') { |io| io.puts(paths); io.close_write; io.read }.split("\n").reject(&:empty?)
+      paths.sort { |a, b| Version.compare(pv_of(a, pn), pv_of(b, pn)) }
+    end
+
+    def self.pv_of(path, pn)
+      File.basename(path, '.ebuild').sub(/\A#{Regexp.escape(pn)}-/, '')
+    end
+
+    # Which ebuilds the bump retires. keep_old is the number of releases to keep (the new one
+    # included), false to keep only the new one, and true or 0 to keep every prior version.
+    def self.retire(releases, keep_old, old_ebuild)
+      return releases[0...-keep_old] || [] if keep_old.is_a?(Integer) && keep_old.positive?
+      return [old_ebuild] unless keep_old
+
+      []
     end
 
     def run
@@ -50,18 +53,11 @@ module Autobump
       # Whatever ebuilds remain, `pkgdev manifest` below keeps their DIST entries automatically:
       # stage 4 already regenerated the Manifest with the new + old ebuilds present (distfiles.rb:31),
       # so it succeeds with no refetch even when an old distfile is no longer fetchable upstream.
-      if c.keep_old.is_a?(Integer) && c.keep_old.positive?
-        # the new ebuild already exists (stage 4); keep the N highest releases, drop the rest.
-        # Order by PORTAGE version (vercmp), NOT `sort -V`: GNU sort -V ranks _alpha/_beta/_pre/_rc
-        # as NEWER than the release, but portage/pkgdev rank them OLDER -- so sort -V could keep a
-        # stale _rc and git-rm the newest real release.
-        ebuilds = `ls #{c.pkgdir.shellescape}/*.ebuild 2>/dev/null | grep -vE -- '-9{4,}'`
-                  .lines.map(&:strip).reject(&:empty?)
-        releases = Finalize.sort_by_version(ebuilds, c.pn)
-        (releases[0...-c.keep_old] || []).each { |e| system('git', '-C', repo, 'rm', '-q', e) }
-      elsif !c.keep_old
-        system('git', '-C', repo, 'rm', '-q', c.old_ebuild)
-      end
+      # the new ebuild exists but is not committed yet, so this lists the directory rather than
+      # what git tracks
+      ebuilds = Dir.glob(File.join(c.pkgdir, '*.ebuild')).reject { |f| f =~ /-9{4,}\.ebuild\z/ }
+      releases = Finalize.sort_by_version(ebuilds, c.pn)
+      Finalize.retire(releases, c.keep_old, c.old_ebuild).each { |e| system('git', '-C', repo, 'rm', '-q', e) }
       # keep_old == 0 (or true) -> keep ALL prior versions: neither branch runs, nothing is dropped
       # regen the Manifest: drops the removed version's DIST entry when dropped, keeps both when
       # keep_old (distfiles all local, no refetch). capture the output so a failure carries reason.
@@ -70,7 +66,7 @@ module Autobump
       system('git', '-C', repo, 'add', c.pkgdir)
       c.evidence.write('pkgcheck-after.txt', Finalize.pkgcheck_scan(repo, c.pkg))
       base = c.evidence.path('pkgcheck-baseline.txt'); after = c.evidence.path('pkgcheck-after.txt')
-      new = `comm -13 #{base.shellescape} #{after.shellescape}`
+      new = Finalize.introduced(File.read(base), File.read(after))
       c.evidence.write('pkgcheck-new.txt', new)
       unless new.strip.empty?
         puts new
@@ -89,20 +85,52 @@ module Autobump
       dead_url_recheck
     end
 
+    # pkgcheck lists findings under a "cat/pn" header, and a finding line need not name the
+    # package at all -- a DeadUrl says only the URL. Select by the header, and take URLs from
+    # the URL findings alone: a MissingRemoteId line quotes a URI in parentheses, and rechecking
+    # `https://github.com/Acme/etcd')` escalates a bump whose URLs are all fine.
+    URL_IN_TEXT = %r{https?://[^\s'"<>]+}
+
+    # The findings the bump added: what the after-scan reports and the baseline did not. A
+    # finding the bump REMOVED is not a reason to escalate.
+    def self.introduced(baseline, after)
+      before = baseline.lines.map(&:chomp).to_h { |l| [l, true] }
+      added = after.lines.map(&:chomp).reject { |l| l.empty? || before[l] }
+      added.empty? ? '' : added.join("\n") + "\n"
+    end
+
+    # What the recheck proves. A 000 or 5xx says the network was unhappy, not that the URL is
+    # dead, so it defers rather than permanently escalating a bump that built and committed
+    # clean; only a stable 4xx is a confirmed DeadUrl.
+    def self.recheck_verdict(recheck)
+      bad = recheck.reject { |l| l.end_with?(' -> 200') }
+      return :clean if bad.empty?
+      bad.all? { |l| l =~ / -> (000|5[0-9][0-9])\z/ } ? :inconclusive : :dead
+    end
+
+    def self.flagged_urls(scan_output, pkg)
+      current = nil
+      scan_output.each_line.with_object([]) do |line, urls|
+        if (header = line[/\A(\S+\/\S+)[[:space:]]*\z/, 1])
+          current = header
+        end
+        # the default reporter groups findings under a header; another one prints
+        # "cat/pn-version: Check: ..." per line. Take the package from whichever is there.
+        mine = current == pkg || line.start_with?("#{pkg}-")
+        next unless mine && line =~ /DeadUrl|RedirectedUrl/
+
+        urls.concat(line.scan(URL_IN_TEXT).map { |u| u.sub(/[)\],.;:'"]+\z/, '') })
+      end.uniq
+    end
+
     private
 
     def dead_url_recheck
       c = @c; repo = c.cfg.repo
       net = Dir.chdir(repo) { `pkgcheck scan --commits --net 2>&1`.scrub }
       c.evidence.write('pkgcheck-net.txt', net)
-      flagged = net.lines.select { |l| l =~ /DeadUrl|RedirectedUrl/ && l.include?(c.pn) }
-      return if flagged.empty?
-      # re-verify only the URLs in the PN-context window (bash: `grep -A1 "$PN"`), not
-      # the whole scan, so an unrelated DeadUrl elsewhere can't force a false escalate.
-      lines = net.lines
-      window = +''
-      lines.each_index { |i| window << lines[i] << (lines[i + 1] || '') if lines[i].include?(c.pn) }
-      urls = window.scan(%r{https://[^ \r\n]+}).uniq
+      urls = Finalize.flagged_urls(net, c.pkg)
+      return if urls.empty?
       # array-form curl: a URL with '&' (query strings) must not be split by the shell
       recheck = urls.map do |u|
         code = IO.popen(['curl', '-sL', '--max-time', '20', '-o', '/dev/null', '-w', '%{http_code}', u], &:read).strip
@@ -110,14 +138,15 @@ module Autobump
         "#{u} -> #{code}"
       end
       c.evidence.write('url-recheck.txt', recheck.join("\n") + "\n")
-      bad = recheck.reject { |l| l.end_with?(' -> 200') }
-      return Log.log('pkgcheck URL findings were transient (all URLs 200 on recheck)') if bad.empty?
-      puts bad.join("\n")
-      # a 000/timeout/5xx is network-inconclusive, not a confirmed dead URL: defer (retry next
-      # sweep) rather than permanently escalate a bump that already built + committed clean, on
-      # a mirror/CDN blip. Only a stable 4xx is a real DeadUrl -> escalate.
-      raise Abort, 'URL recheck inconclusive (network/5xx); deferring' if bad.all? { |l| l =~ %r{ -> (000|5[0-9][0-9])\z} }
-      raise Escalate.new('URL findings persist after recheck', c.evidence.dir)
+      case Finalize.recheck_verdict(recheck)
+      when :clean then return Log.log('pkgcheck URL findings were transient (all URLs 200 on recheck)')
+      when :inconclusive
+        puts recheck.reject { |l| l.end_with?(' -> 200') }.join("\n")
+        raise Abort, 'URL recheck inconclusive (network/5xx); deferring'
+      else
+        puts recheck.reject { |l| l.end_with?(' -> 200') }.join("\n")
+        raise Escalate.new('URL findings persist after recheck', c.evidence.dir)
+      end
     end
   end
 end

@@ -33,7 +33,7 @@ module Autobump
       Log.ok "branch #{c.branch} off synced master"
       # Re-read OLD_EBUILD from the now-synced tree (stage-1 read the working tree,
       # which on a dev box may lag canonical master). Same pipeline as locate.
-      c.old_ebuild = `ls #{c.pkgdir.shellescape}/*.ebuild 2>/dev/null | grep -vE -- '-9{4,}' | sort -V | tail -1`.strip
+      c.old_ebuild = Version.release_ebuilds(repo, c.pkgdir).last.to_s
       raise Abort, "no release ebuild in #{c.pkgdir} after sync" if c.old_ebuild.empty?
       c.old_pvr = File.basename(c.old_ebuild, '.ebuild').sub(/\A#{Regexp.escape(c.pn)}-/, '')
       c.old_pv  = c.old_pvr.sub(/-r[0-9]+\z/, '')
@@ -41,8 +41,8 @@ module Autobump
       # re-apply classify's strict-newer guard against the SYNCED old_pv: stage-1 read a
       # possibly-lagging dev-box tree, but synced master may already be PAST the target, in
       # which case proceeding would silently open a version-downgrade PR.
-      top = `printf '%s\\n%s\\n' #{c.old_pv.shellescape} #{c.newver.shellescape} | sort -V | tail -1`.strip
-      raise Abort, "synced master is at #{c.old_pv}, newer than target #{c.newver} (would downgrade)" unless top == c.newver
+      raise Abort, "synced master is at #{c.old_pv}, newer than target #{c.newver} (would downgrade)" \
+        unless Version.newer?(c.newver, c.old_pv)
       raise Abort, "#{c.new_ebuild} already exists on synced master" if File.exist?(c.new_ebuild)
       Log.log "current updated after sync: -> #{c.old_pvr}" if c.old_pvr != c.old_pvr_presync
       # bash 318: run in $REPO, identical sed+sort -u pipeline, so the later locale

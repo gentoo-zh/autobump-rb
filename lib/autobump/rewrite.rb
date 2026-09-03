@@ -4,6 +4,9 @@ module Autobump
   # before a Manifest can fetch an artifact; test/rewrite.rb pins their safety rules.
   module Rewrite
     Result = Struct.new(:text, :old_value, :reason, :changed, keyword_init: true)
+    # The pattern comes from the overlay's config, and a backreference defeats Ruby's
+    # backtracking memoization: one typo would otherwise hang the run to its job ceiling.
+    EXTRACT_TIMEOUT = 2
     VALIDATION_VALUE = '__autobump_rewrite_validation__'
 
     class << self
@@ -11,9 +14,9 @@ module Autobump
       # empty capture or a bad pattern are deliberately indistinguishable to the caller:
       # none of them is safe to rewrite with.
       def extract_value(document, regex:)
-        raw = Regexp.new(regex).match(document)&.[](1)
+        raw = Regexp.new(regex, timeout: EXTRACT_TIMEOUT).match(document)&.[](1)
         raw.is_a?(String) && !raw.empty? ? raw : nil
-      rescue RegexpError, TypeError, ArgumentError
+      rescue RegexpError, TypeError, ArgumentError, Regexp::TimeoutError
         nil
       end
 

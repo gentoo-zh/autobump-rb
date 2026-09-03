@@ -16,5 +16,8 @@ demo-cat/multiarch	1.0.1	0
 demo-cat/deps	1.0.1	2	per-version deps artifact missing (HTTP 404): https://github.com/gentoo-zh-drafts/deps/releases/download/v1.0.1/deps-1.0.1-vendor.tar.xz
 demo-cat/datever	20240202	0	
 demo-cat/datever	20230101	3	date version went backwards||not newer
+demo-cat/prerelease	1.1.0	0	
+demo-cat/prerelease	1.1.0_beta1	3	not newer
+demo-cat/varurl	1.0.1	0	
 demo-cat/haskell	1.0.1	3	haskell-cabal
 demo-cat/twoslots	1.2.0	3	parallel release lines by SLOT

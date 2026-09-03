@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+require_relative 'autobump/version'
 require_relative 'autobump/config'
 require_relative 'autobump/evidence'
 require_relative 'autobump/runtime'

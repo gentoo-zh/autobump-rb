@@ -7,8 +7,9 @@ and a new upstream version it either lands a clean bump — copy the ebuild, ref
 Manifest, build-test, run the QA gates, commit, open a PR — or stops with an **evidence pack** saying
 why the bump is not mechanically safe.
 
-A per-package `keep_old = N` instead keeps the N most-recent versions on a bump (add the new ebuild,
-drop anything older; `0` keeps them all), for packages that intentionally retain several versions.
+`--keep-old=N` instead keeps the N most-recent versions on a bump (add the new ebuild, drop
+anything older) and `--keep-old` keeps them all, for packages that intentionally retain several
+versions. In the overlay that comes from the package's `autobump = N` table entry.
 
 It only does bumps it can prove safe. Anything needing judgement — a new dependency, a major-version
 jump, a stale source pin, a changed build surface — escalates instead of being patched from a guess.
@@ -26,12 +27,13 @@ Everything downstream (the sweep driver, CI, a judge) keys off three exit codes:
 
 ## Usage
 
-    ruby bin/autobump <cat/pkg> <newver> --check      # classify only: mechanical (0) or escalate (3)
+    ruby bin/autobump <cat/pkg> <newver> --check      # classify only: mechanical (0), retry later (2), escalate (3)
     ruby bin/autobump <issue#> --check                # resolve an nvchecker bump issue first
     ruby bin/autobump <cat/pkg> <newver> --pr         # full pipeline: build-test, commit, open PR
     ruby bin/autobump <cat/pkg> <newver> --install    # local build-test: build+install+pkgcheck, local commit, no push/PR
 
-    rake                                              # syntax + the golden decision test (what CI runs)
+    rake                                              # the whole suite (what CI runs)
+    AUTOBUMP_OVERLAY=/path/to/overlay rake sweep      # and the overlay driver's tests, which need it
     bash test/decisions.sh                            # golden decision test on its own (hermetic fixtures)
     sudo bash test/e2e.sh                             # hermetic end-to-end: really emerges a fixture pkg
 

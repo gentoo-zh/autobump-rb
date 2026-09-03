@@ -12,6 +12,15 @@ module Autobump
       /<\/maintainer>/{print e "\t" n}
     AWK
 
+    # A multi-arch bump is opened as a draft: only amd64 was built here, so the other
+    # keywords are untested until a human says otherwise.
+    def self.create_args(repo:, head:, title:, body_file:, multiarch:)
+      args = ['gh', 'pr', 'create', '--repo', repo, '--base', 'master',
+              '--head', head, '--title', title, '--body-file', body_file]
+      args << '--draft' if multiarch
+      args
+    end
+
     def initialize(ctx) = (@c = ctx)
 
     def run
@@ -23,11 +32,14 @@ module Autobump
       owner = `git -C #{cfg.repo.shellescape} remote get-url #{cfg.push_remote.shellescape}`.strip
               .sub(/\.git$/, '').sub(%r{/$}, '').sub(%r{.*[:/]([^/]+)/[^/]+$}, '\1')
       head = owner == cfg.upstream_repo.split('/').first ? c.branch : "#{owner}:#{c.branch}"
-      # a reviewer may have pushed fixups onto an open PR for this branch; do not clobber
-      jq = ".[] | select(.headRefName==\"#{c.branch}\" and .headRepositoryOwner.login==\"#{owner}\") | .number"
+      # a reviewer may have pushed fixups onto an open PR for this branch; do not clobber.
+      # Ask about this branch (--head), not about the newest 30 open PRs gh lists by default.
       open = IO.popen(['gh', 'pr', 'list', '--repo', cfg.upstream_repo, '--state', 'open',
-                       '--json', 'number,headRefName,headRepositoryOwner', '--jq', jq],
+                       '--head', head, '--json', 'number', '--jq', '.[].number'],
                       err: File::NULL, &:read)
+      # a failed query proves nothing; pushing on it would force over the branch it was
+      # supposed to protect
+      raise Abort, "cannot tell whether #{c.branch} has an open PR (gh failed); not pushing" unless $?&.success?
       unless open.strip.empty?
         Log.log "an open PR already exists for #{c.branch} - not pushing (would clobber review)"
         return
@@ -46,9 +58,8 @@ module Autobump
       body = c.evidence.path('pr-body.md')
       File.write(body, pr_body)
       subj = `git -C #{cfg.repo.shellescape} log -1 --format=%s`.strip
-      args = ['gh', 'pr', 'create', '--repo', cfg.upstream_repo, '--base', 'master',
-              '--head', head, '--title', subj, '--body-file', body]
-      args << '--draft' if c.multiarch
+      args = PR.create_args(repo: cfg.upstream_repo, head: head, title: subj, body_file: body,
+                            multiarch: c.multiarch)
       raise Abort, 'gh pr create failed' unless system(*args)
       Log.ok 'PR opened'
     end
@@ -104,12 +115,15 @@ module Autobump
         return ["- diff vs #{c.old_pvr}: #{empty}"]
       end
       cap = 120
+      # every removal, then as many additions as fit: a removal is the side that can break the
+      # package, so it must not sort past the cap behind a wall of additions.
+      shown_added = added.first([cap - removed.size, 0].max)
+      entries = shown_added.map { |p| [p, '+'] } + removed.map { |p| [p, '-'] }
       # sort by path so related changes sit together: a rename shows -old/+new adjacent,
       # and same-directory changes cluster instead of scattering across an all-+/all-- split.
-      entries = added.map { |p| [p, '+'] } + removed.map { |p| [p, '-'] }
       entries.sort_by! { |p, _| p }
-      diff = entries.first(cap).map { |p, s| "#{s} #{p}" }
-      diff << "… #{entries.size - cap} more" if entries.size > cap
+      diff = entries.map { |p, s| "#{s} #{p}" }
+      diff << "… #{added.size - shown_added.size} more additions" if shown_added.size < added.size
       ['', "**#{kind} diff vs #{c.old_pvr}** (+#{added.size}/-#{removed.size})#{note}",
        '<details><summary>show</summary>', '', '```diff', *diff, '```', '</details>']
     end

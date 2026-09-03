@@ -1,9 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
-# Test the --keep-old wiring: CLI.parse recognizes the flag, defaults it off, and threads
-# it through to the Context struct. The actual behavior (finalize adds the new ebuild without
-# dropping the old one) is proven by a real keep-old bump in the autobump-trial workflow / e2e.
-# Hermetic -- no portage, no git. Run: ruby test/keep_old.rb
+# Test what the command line asks the engine for: which flags parse, which combinations are
+# refused, and which ebuilds --keep-old retires.
+# Hermetic -- no portage, no git. Run: ruby test/cli_flags.rb
 require_relative '../lib/autobump'
 
 $fail = 0
@@ -48,6 +47,36 @@ check 'sort_by_version oldest-first',
       Autobump::Finalize.sort_by_version(%w[/p/foo-2.0.ebuild /p/foo-1.1.ebuild /p/foo-1.0.ebuild], 'foo')
         .map { |p| File.basename(p) },
       %w[foo-1.0.ebuild foo-1.1.ebuild foo-2.0.ebuild]
+
+# what the flag actually decides: which ebuilds the bump retires
+F = Autobump::Finalize
+paths = %w[/p/pkg-1.0.ebuild /p/pkg-1.2.0_rc1.ebuild /p/pkg-1.2.0.ebuild /p/pkg-1.1.0.ebuild]
+sorted = F.sort_by_version(paths, 'pkg')
+names = ->(list) { list.map { |f| File.basename(f) } }
+
+check 'a release candidate sorts below its release, not above',
+      names.call(sorted), %w[pkg-1.0.ebuild pkg-1.1.0.ebuild pkg-1.2.0_rc1.ebuild pkg-1.2.0.ebuild]
+check 'keep 2 retires everything older',
+      names.call(F.retire(sorted, 2, '/p/pkg-1.0.ebuild')), %w[pkg-1.0.ebuild pkg-1.1.0.ebuild]
+check 'keep 9 retires nothing', F.retire(sorted, 9, '/p/pkg-1.0.ebuild'), []
+check 'no keep_old retires the version the bump replaced',
+      names.call(F.retire(sorted, false, '/p/pkg-1.0.ebuild')), %w[pkg-1.0.ebuild]
+check 'keep_old true keeps every prior version', F.retire(sorted, true, '/p/pkg-1.0.ebuild'), []
+check 'keep_old 0 keeps every prior version', F.retire(sorted, 0, '/p/pkg-1.0.ebuild'), []
+
+# argument combinations that would report a bump nobody made
+def refuses(args)
+  Autobump::CLI.parse(args)
+  false
+rescue SystemExit
+  true
+end
+
+check '--diff-only with --pr is refused', refuses(%w[--diff-only --pr cat/pkg 1.2.3]), true
+check 'a second target version is refused', refuses(%w[cat/pkg 1.2.3 1.2.4]), true
+check 'a second package is refused', refuses(%w[cat/one 1.2.3 cat/two]), true
+check 'the ordinary invocation still parses',
+      Autobump::CLI.parse(%w[cat/pkg 1.2.3 --pr]).values_at(:pkg, :newver, :pr), ['cat/pkg', '1.2.3', true]
 
 puts '----'
 puts "keep_old: #{$fail.zero? ? 'all passed' : "#{$fail} failed"}"

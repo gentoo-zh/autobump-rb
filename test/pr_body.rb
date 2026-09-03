@@ -30,6 +30,15 @@ def ev_with(pn, files = {})
 end
 
 $fail = 0
+def check_eq(name, got, want)
+  if got == want
+    puts "ok   #{name}"
+  else
+    $fail += 1
+    puts "FAIL #{name}\n       got  #{got.inspect}\n       want #{want.inspect}"
+  end
+end
+
 def check(name, body, must: [], absent: [])
   errs = []
   Array(must).each   { |m| errs << "missing #{m.inspect}"     unless body.include?(m) }
@@ -119,6 +128,15 @@ check 'cap: >120 entries truncated',
                  pkg: 'p/q-bin', old_pvr: '1', newver: '2', old_pv: '1', payload: true, smoke: 'ok')),
       must: ['**payload diff vs 1** (+150/-0)', '… 30 more']
 
+# H2. a removal never sorts past the cap: additions are truncated, removals are all shown
+many_added = (1..150).map { |i| format('usr/lib/x/added-%03d.dat', i) }.join("\n")
+removed_late = "usr/lib/x/zz-removed-1.so\nusr/lib/x/zz-removed-2.so"
+check 'cap: every removal survives a wall of additions',
+      render(ctx(ev_with('h2', 'tree-added-real.txt' => many_added + "\n",
+                               'tree-removed-real.txt' => removed_late + "\n"),
+                 pkg: 'p/q-bin', old_pvr: '1', newver: '2', old_pv: '1', payload: true, smoke: 'ok')),
+      must: ['- usr/lib/x/zz-removed-1.so', '- usr/lib/x/zz-removed-2.so', '… 32 more additions']
+
 # H. content-hash asset churn only (structural add/remove empty) -> no dump, churn noted, no escalate
 check 'payload: asset churn only -> no structural change, churn counted',
       render(ctx(ev_with('h', 'tree-added-real.txt' => '', 'tree-removed-real.txt' => '',
@@ -127,6 +145,14 @@ check 'payload: asset churn only -> no structural change, churn counted',
                  payload: true, smoke: '--version ok: foo 1.1')),
       must: ['no structural payload changes', '1000 bundled assets rebuilt'],
       absent: ['<details>', '.js']
+
+# I. a multi-arch bump is opened as a draft; a single-arch one is not
+draft = Autobump::PR.create_args(repo: 'gentoo-zh/overlay', head: 'b', title: 't', body_file: 'f',
+                                 multiarch: true)
+plain = Autobump::PR.create_args(repo: 'gentoo-zh/overlay', head: 'b', title: 't', body_file: 'f',
+                                 multiarch: false)
+check_eq 'multi-arch opens a draft', draft.include?('--draft'), true
+check_eq 'single-arch does not', plain.include?('--draft'), false
 
 puts '----'
 puts "pr_body: #{$fail.zero? ? 'all passed' : "#{$fail} failed"}"
