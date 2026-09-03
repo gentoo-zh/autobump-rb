@@ -29,6 +29,17 @@ module Autobump
     GUI_CRASH_STATUSES = [132, 134, 135, 136, 139].freeze
     GUI_STOP_STATUSES = (GUI_CRASH_STATUSES + [124]).freeze
 
+    # Which saved elog belongs to THIS bump. A dependency the emerge pulled in writes its own
+    # elog (net-libs/nodejs' postinst notice), and a sibling sharing the pn prefix in the same
+    # category (dev-python/conda vs conda-libmamba-solver) or a longer version (1.2.3 vs 1.2.30)
+    # would be attributed to the bump by a prefix match. Portage writes either layout:
+    #   flat        elog/<cat>:<pn>-<ver>:<ts>.log
+    #   split-elog  elog/<cat>/<pn>-<ver>:<ts>.log
+    def self.own_elog?(path, cat, pn, newver)
+      File.basename(path).start_with?("#{cat}:#{pn}-#{newver}:") ||
+        path.include?("/#{cat}/#{pn}-#{newver}:")
+    end
+
     def initialize(ctx) = (@c = ctx)
 
     def run
@@ -163,8 +174,8 @@ module Autobump
       # match BOTH portage layouts so a split-elog host doesn't silently pass a real elog:
       #   default flat  -> elog/<cat>:<pn>-<newver>:<ts>.log   (basename carries cat:)
       #   split-elog    -> elog/<cat>/<pn>-<newver>:<ts>.log   (cat is a dir, basename has no cat:)
-      flat = "#{c.cat}:#{c.pn}-#{c.newver}*"
-      elog_files = `#{cfg.sudo} find #{plog.shellescape}/elog -type f \\( -name #{flat.shellescape} -o -path "*/#{c.cat}/#{c.pn}-#{c.newver}:*" \\) 2>/dev/null`.lines.map(&:chomp).reject(&:empty?)
+      found = `#{cfg.sudo} find #{plog.shellescape}/elog -type f 2>/dev/null`.lines.map(&:chomp).reject(&:empty?)
+      elog_files = found.select { |f| BuildTest.own_elog?(f, c.cat, c.pn, c.newver) }
       if elog_files.any?
         dump = elog_files.map { |f| `#{cfg.sudo} cat #{f.shellescape} 2>/dev/null` }.join
         puts dump.lines.first(25).join
