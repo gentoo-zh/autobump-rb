@@ -4,6 +4,7 @@
 # matter and assert the structure. Hermetic -- no network, no gh/git; the maintainer cc
 # (which shells out) is stubbed. Complements test/decisions.sh, which only covers the
 # classifier. Run: ruby test/pr_body.rb   (also `rake`).
+require 'tmpdir'
 require_relative '../lib/autobump'
 
 # a render helper + a controllable cc, so the body builds without shelling out
@@ -153,6 +154,22 @@ plain = Autobump::PR.create_args(repo: 'gentoo-zh/overlay', head: 'b', title: 't
                                  multiarch: false)
 check_eq 'multi-arch opens a draft', draft.include?('--draft'), true
 check_eq 'single-arch does not', plain.include?('--draft'), false
+
+# the open-PR guard: a blip must not cost a bump that is already built, and a refusal must
+# say what gh said
+stub = File.join(Dir.mktmpdir('autobump-gh-'), 'gh')
+File.write(stub, "#!/bin/sh\necho 'gh: HTTP 502 Bad Gateway' >&2\nexit 1\n")
+File.chmod(0o755, stub)
+path = ENV['PATH']
+ENV['PATH'] = "#{File.dirname(stub)}:#{path}"
+started = Time.now
+open, reason = Autobump::PR.open_pr_for('demo/overlay', 'a-branch')
+elapsed = Time.now - started
+ENV['PATH'] = path
+
+check_eq 'a failing query answers nothing', open, nil
+check_eq 'and carries the reason gh gave', reason, 'gh: HTTP 502 Bad Gateway'
+check_eq 'after retrying', elapsed > 3, true
 
 puts '----'
 puts "pr_body: #{$fail.zero? ? 'all passed' : "#{$fail} failed"}"
