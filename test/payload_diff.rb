@@ -193,10 +193,10 @@ rm, ad, = F.call(%w[app/assets/chunk-2GRJ4B5K-Dtk3djQK.js app/assets/chunk-2Q5K7
                  '1', '2')
 check 'a rehash behind a stable id folds', [rm, ad], [[], []]
 
-# ...and two different ids must not pair with each other
-rm, = F.call(%w[app/assets/chunk-2GRJ4B5K-Dtk3djQK.js],
+# ...and two different ids do not pair by name; only the directory count clears them
+rm, = F.call(%w[app/assets/chunk-2GRJ4B5K-Dtk3djQK.js app/assets/chunk-7QQQQQQQ-Bz6qKO3a.js],
              %w[app/assets/chunk-9ZZZZZZZ-DrXvAXa3.js], '1', '2')
-check 'different stable ids stay structural', rm, %w[app/assets/chunk-2GRJ4B5K-Dtk3djQK.js]
+check 'different stable ids do not pair by name', rm.size, 2
 
 # a deployment fingerprint rehashes in front of the chunk id
 digest_a = '3' + 'a' * 47
@@ -204,8 +204,26 @@ digest_b = '4' + 'b' * 47
 rm, ad, = F.call(["app/dist/#{digest_a}-CVu4teRk.js"], ["app/dist/#{digest_b}-CVu4teRk.js"], '1', '2')
 check 'a fingerprint rehash folds', [rm, ad], [[], []]
 
-rm, = F.call(["app/dist/#{digest_a}-CVu4teRk.js"], ["app/dist/#{digest_b}-DifferentX.js"], '1', '2')
-check 'a fingerprint file with no counterpart stays structural', rm, ["app/dist/#{digest_a}-CVu4teRk.js"]
+# a chunk id that changed with the content: no name can pair it, so the directory's own count
+# is the check - claude-desktop swaps two of its assets for two under different ids
+rm, ad, = F.call(["app/dist/#{digest_a}-CVu4teRk.js"], ["app/dist/#{digest_b}-DifferentX.js"], '1', '2')
+check 'a chunk swapped for one under another id folds', [rm, ad], [[], []]
+
+digest_c = '5' + 'c' * 47
+rm, = F.call(["app/dist/#{digest_a}-CVu4teRk.js", "app/dist/#{digest_c}-Cn24xRWk.js"],
+             ["app/dist/#{digest_b}-DifferentX.js"], '1', '2')
+check 'a directory that came back smaller still escalates', rm.size, 2
+
+# kiro rehashes a chunk under an upper-case hash, which reads as a name to the pairing rules
+kiro = 'kiro/dist/assets/gitGraphDiagram-DS77QQ5N-'
+rm, ad, = F.call(["#{kiro}Bz6qKO3a.js"], ["#{kiro}BIS-CJUO.js"], '1.0.436', '1.0.437')
+check 'an upper-case rehash folds on the directory count', [rm, ad], [[], []]
+
+rm, = F.call(%w[app/dist/runtime-modules.js], %w[app/dist/runtime-services.js], '1', '2')
+check 'a word is not a hash, so a renamed script stays structural', rm, %w[app/dist/runtime-modules.js]
+
+rm, = F.call(["app/lib/libfoo-Bz6qKO3a.so"], ["app/lib/libbar-CVu4teRk.so"], '1', '2')
+check 'a library is not a chunk', rm, ["app/lib/libfoo-Bz6qKO3a.so"]
 
 puts '----'
 if $fail.zero?

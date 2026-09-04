@@ -36,6 +36,15 @@ module Autobump
     # sourcemap/licence companion of it. The stem is greedy so only the LAST token is the run.
     FINGERPRINT_NAME = /\A[0-9a-f]{48}-(?<chunk>[A-Za-z0-9_-]{7,})(?<ext>\.[A-Za-z0-9]+(?:\.(?:map|LICENSE\.txt))?)\z/
     HASH_NAME = /\A(?<stem>.+[-.])(?<run>[A-Za-z0-9_-]{7,})(?<ext>\.[A-Za-z0-9]+(?:\.(?:map|LICENSE\.txt))?)\z/
+    # A script or style bundle: what rule (4) treats as a chunk, on top of an integer name.
+    CHUNK_EXT = /\.(?:js|mjs|cjs|css)(?:\.map|\.LICENSE\.txt)?\z/
+
+    # A base64url content hash, as vite and rollup spell it: an upper-case letter plus
+    # something that is not upper-case, so BIS-CJUO and u_Su6bzX read as hashes while a word
+    # like CHANGELOG or `modules` stays a name a maintainer may care about.
+    def self.content_hash_run?(run)
+      run.length >= 8 && run.match?(/[A-Z]/) && run.match?(/[a-z0-9_-]/)
+    end
 
     # Fold benign churn out of a payload path diff so only structural add/remove is left.
     # Pure -- no filesystem, no Context -- so test/payload_diff.rb can pin every rule.
@@ -117,13 +126,24 @@ module Autobump
       #     chunks while that directory came back at least as large, so a dist/ that emptied
       #     out or shrank is still a removal. The basename must be an integer and the extension
       #     a script or style one, so a dropped icon16.png next to an added icon32.png stays
-      #     structural.
-      chunk = ->(p) { File.basename(p).match?(/\A\d+\.(js|mjs|cjs|css)(\.map|\.LICENSE\.txt)?\z/) }
+      #     structural. A content-hashed chunk counts too: claude-desktop swaps two of 2757
+      #     assets for two under different ids, and no per-name key can pair those - the name
+      #     is the content. The directory's own count is the check that nothing was dropped.
+      chunk = lambda do |p|
+        base = File.basename(p)
+        next false unless base.match?(CHUNK_EXT)
+        next true if base.match?(/\A\d+#{CHUNK_EXT.source}/o)
+
+        run = base.match(FINGERPRINT_NAME)&.[](:chunk) || base.match(HASH_NAME)&.[](:run)
+        !run.nil? && content_hash_run?(run)
+      end
       chunks_per_dir = lambda do |paths|
         paths.select(&chunk).group_by { |p| File.dirname(p) }.transform_values(&:size)
       end
-      gained = chunks_per_dir.call(real_added)
-      lost = chunks_per_dir.call(real_removed)
+      # counted from the diff as it arrived: rule (2) discards hash-bearing additions on sight,
+      # and counting what is left would make every rebuilt directory look like it shrank
+      gained = chunks_per_dir.call(added)
+      lost = chunks_per_dir.call(removed)
       # a rebuild renumbers, it does not net-delete: a directory that came back smaller lost
       # something, and that is what a maintainer has to see
       # a rebuild renames what was there: a directory that only gained chunks did not rebuild,
