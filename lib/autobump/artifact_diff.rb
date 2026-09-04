@@ -58,8 +58,9 @@ module Autobump
     #     changing dirname, which this rule does not pair). Fold only on an exact 1:1 match;
     #     with two candidates for one key a real removal could hide behind a coincidence.
     def self.fold_benign(removed, added, old_pv, newver)
-      real_removed = removed.reject { |p| added.include?(p.gsub(old_pv, newver)) }
-      real_added   = added.reject   { |p| removed.include?(p.gsub(newver, old_pv)) }
+      renames = version_forms(old_pv).zip(version_forms(newver))
+      real_removed = removed.reject { |p| renames.any? { |old, new| added.include?(p.gsub(old, new)) } }
+      real_added   = added.reject   { |p| renames.any? { |old, new| removed.include?(p.gsub(new, old)) } }
       churned = 0
 
       # (2) a content-hash rename. A lowercase word is a name, not a hash: require a digit or
@@ -114,6 +115,15 @@ module Autobump
     # addition carries the same key, so an unreplaced or ambiguous removal always survives.
     # `drop_added` additionally discards every candidate addition, which only rule (2) wants.
     # Returns [removed, added, folded_count].
+    # How an ebuild can spell its version in a payload path: as PV, as the MY_PV="${PV/_p/-}"
+    # family, and as the dotted core without a suffix - ungoogled-chromium-bin unpacks into
+    # ungoogled-chromium-152.0.7977.64-1-x86_64_linux/ for PV 152.0.7977.64_p1. The core is
+    # only used when it carries a dot: a bare number would substitute all over the path.
+    def self.version_forms(version)
+      core = version[/\A\d+(?:\.\d+)+/]
+      [version, version.sub(/_p(\d*)/, '-\1'), core].compact.uniq
+    end
+
     def self.fold_pairs(removed, added, candidate:, key:, drop_added: false)
       rm_by_key = removed.select(&candidate).group_by(&key)
       ad_by_key = added.select(&candidate).group_by(&key)

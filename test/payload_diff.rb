@@ -167,6 +167,26 @@ check 'a numeric basename with another extension stays structural', rm, %w[opt/a
 rm, ad, = F.call([], %w[opt/app/dist/1053.js], '1', '2')
 check 'a chunk that is only added is not a rebuild', [rm, ad], [[], %w[opt/app/dist/1053.js]]
 
+# an ebuild that spells its version differently in the payload: ungoogled-chromium-bin builds
+# MY_PV="${PV/_p/-}" and unpacks into a directory named after it
+rm, ad, = F.call(%w[ungoogled-chromium-1.2.3-1-x86_64_linux/chrome
+                    ungoogled-chromium-1.2.3-1-x86_64_linux/locales/en-US.pak],
+                 %w[ungoogled-chromium-1.2.4-1-x86_64_linux/chrome
+                    ungoogled-chromium-1.2.4-1-x86_64_linux/locales/en-US.pak],
+                 '1.2.3_p1', '1.2.4_p1')
+check 'a MY_PV directory rename folds', [rm, ad], [[], []]
+
+check 'the forms a version can take in a path',
+      Autobump::ArtifactDiff.version_forms('152.0.7977.64_p1'),
+      %w[152.0.7977.64_p1 152.0.7977.64-1 152.0.7977.64]
+check 'a version with no suffix has one form',
+      Autobump::ArtifactDiff.version_forms('1.2.3'), %w[1.2.3]
+check 'a bare number is not used as a substitution key',
+      Autobump::ArtifactDiff.version_forms('2'), %w[2]
+# with a suffixed single-digit version, a bare core would substitute all over the path
+rm, = F.call(%w[usr/share/icons/icon2.png], %w[usr/share/icons/icon3.png], '2_p1', '3_p1')
+check 'a dropped icon is not a version rename', rm, %w[usr/share/icons/icon2.png]
+
 puts '----'
 if $fail.zero?
   puts 'payload_diff: all passed'
