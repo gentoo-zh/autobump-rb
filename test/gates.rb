@@ -38,6 +38,16 @@ check 'a new finding is what the bump introduced',
 check 'a finding the bump fixed is not a reason to escalate',
       I.call("DeadUrl: a\nUnstableOnly: b\n", "DeadUrl: a\n"), ''
 
+# emerge refusing for a USE change says the same thing every run: it is a maintainer's call
+use_change = <<~OUT
+  The following USE changes are necessary to proceed:
+   (see "package.use" in the portage(5) man page for more details)
+  # required by app-dicts/fcitx-pinyin-moegirl-20260812::gentoo-zh
+  >=app-i18n/opencc-1.1.9 python
+OUT
+check 'a USE-change refusal is not a flake', Autobump::BuildTest.needs_use_change?(use_change), true
+check 'a mirror timeout is', Autobump::BuildTest.needs_use_change?("Connection timed out\n"), false
+
 puts '----'
 puts $fail.zero? ? 'gates: all passed' : "gates: #{$fail} failed"
 exit($fail.zero? ? 0 : 1)

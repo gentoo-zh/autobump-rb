@@ -35,6 +35,10 @@ module Autobump
     # would be attributed to the bump by a prefix match. Portage writes either layout:
     #   flat        elog/<cat>:<pn>-<ver>:<ts>.log
     #   split-elog  elog/<cat>/<pn>-<ver>:<ts>.log
+    def self.needs_use_change?(emerge_output)
+      emerge_output.include?('The following USE changes are necessary')
+    end
+
     def self.own_elog?(path, cat, pn, newver)
       File.basename(path).start_with?("#{cat}:#{pn}-#{newver}:") ||
         path.include?("/#{cat}/#{pn}-#{newver}:")
@@ -278,7 +282,12 @@ module Autobump
       if erc == 124
         raise Abort, "emerge timed out (>#{c.cfg.op_timeout}s): heavy build, not a defect. Deferring."
       end
-      if out =~ /have been masked|masked packages|required to complete your request|no ebuilds to satisfy|Blocked Packages|not be installed|USE changes are necessary|autounmask/
+      # a USE change is a stable contract between the package and the profile: the same
+      # emerge refuses the same way every run, so it is a maintainer's decision, not a retry
+      if BuildTest.needs_use_change?(out)
+        raise Escalate.new('emerge needs a USE change to resolve dependencies', c.evidence.dir)
+      end
+      if out =~ /have been masked|masked packages|required to complete your request|no ebuilds to satisfy|Blocked Packages|not be installed|autounmask/
         raise Abort, 'cannot smoke-test locally: dependency resolution needs a change here (overlay ~amd64 dep / PYTHON_TARGET / transitive USE). Not a bump defect; CI resolves it. Deferring.'
       end
       raise Escalate.new('emerge failed', c.evidence.dir)

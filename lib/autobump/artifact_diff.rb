@@ -32,8 +32,10 @@ module Autobump
 
     # Placeholder for the version or hash run blanked out by pairing rules (2) and (3).
     VER_HOLE = '<v>'
-    # the run sits before the final extension, or before a sourcemap/licence companion of it
-    HASH_RUN = /(?<=[-.])[A-Za-z0-9_-]{7,}(?=\.[A-Za-z0-9]+(?:\.(?:map|LICENSE\.txt))?\z)/
+    # stem, hash run, extension: the run sits before the final extension, or before a
+    # sourcemap/licence companion of it. The stem is greedy so only the LAST token is the run.
+    FINGERPRINT_NAME = /\A[0-9a-f]{48}-(?<chunk>[A-Za-z0-9_-]{7,})(?<ext>\.[A-Za-z0-9]+(?:\.(?:map|LICENSE\.txt))?)\z/
+    HASH_NAME = /\A(?<stem>.+[-.])(?<run>[A-Za-z0-9_-]{7,})(?<ext>\.[A-Za-z0-9]+(?:\.(?:map|LICENSE\.txt))?)\z/
 
     # Fold benign churn out of a payload path diff so only structural add/remove is left.
     # Pure -- no filesystem, no Context -- so test/payload_diff.rb can pin every rule.
@@ -63,17 +65,42 @@ module Autobump
       real_added   = added.reject   { |p| renames.any? { |old, new| removed.include?(p.gsub(new, old)) } }
       churned = 0
 
-      # (2) a content-hash rename. A lowercase word is a name, not a hash: require a digit or
-      #     mixed case, so a renamed `org.example.desktop` stays structural while
-      #     `kernel.C5XtPPRo.js` folds. Hash-bearing additions fold on their own -- an
-      #     addition cannot escalate, and folding it keeps the churn count meaningful.
-      hashed = lambda do |p|
-        run = File.basename(p)[HASH_RUN]
-        !run.nil? && (run.match?(/\d/) || (run.match?(/[a-z]/) && run.match?(/[A-Z]/)))
+      # (2a) a deployment fingerprint in front of a stable chunk id: claude-desktop ships
+      #      <48 hex>-CVu4teRk.js and redeploys it under a new digest with the same id. This
+      #      runs before the hash fold below, which would otherwise drop the addition that
+      #      identifies the pair. Fixed-width lowercase hex only, and 1:1 in one directory, so
+      #      an ordinary hyphenated name cannot match and an unreplaced file stays structural.
+      fingerprint_key = lambda do |p|
+        match = File.basename(p).match(FINGERPRINT_NAME)
+        next if match.nil?
+
+        "#{File.dirname(p)}/#{VER_HOLE}-#{match[:chunk]}#{match[:ext]}"
       end
       real_removed, real_added, folded =
-        fold_pairs(real_removed, real_added, drop_added: true, candidate: hashed,
-                   key: ->(p) { "#{File.dirname(p)}/#{File.basename(p).sub(HASH_RUN, VER_HOLE)}" })
+        fold_pairs(real_removed, real_added,
+                   candidate: ->(p) { !fingerprint_key.call(p).nil? }, key: fingerprint_key)
+      churned += folded
+
+      # (2) a content-hash rename. A lowercase word is a name, not a hash: require a digit or
+      #     mixed case, so a renamed `org.example.desktop` stays structural while
+      #     `kernel.C5XtPPRo.js` folds. Only the run before the extension is blanked, so a
+      #     stable bundle id in front of it stays in the key: kiro ships
+      #     chunk-2GRJ4B5K-Dtk3djQK.js and rebuilds it as chunk-2GRJ4B5K-DrXvAXa3.js, and
+      #     blanking both tokens collapsed every chunk in the directory onto one key, which
+      #     never pairs. Hash-bearing additions fold on their own -- an addition cannot
+      #     escalate, and folding it keeps the churn count meaningful.
+      hash_key = lambda do |p|
+        match = File.basename(p).match(HASH_NAME)
+        next if match.nil?
+
+        run = match[:run]
+        next unless run.match?(/\d/) || (run.match?(/[a-z]/) && run.match?(/[A-Z]/))
+
+        "#{File.dirname(p)}/#{match[:stem]}#{VER_HOLE}#{match[:ext]}"
+      end
+      real_removed, real_added, folded =
+        fold_pairs(real_removed, real_added, drop_added: true,
+                   candidate: ->(p) { !hash_key.call(p).nil? }, key: hash_key)
       churned += folded
 
       # (3) an independently-versioned bundled artifact: jetbrains-toolbox moves

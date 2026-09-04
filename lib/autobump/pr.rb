@@ -14,6 +14,10 @@ module Autobump
 
     QUERY_TRIES = 3
 
+    def self.workflow_push_refused?(output)
+      output.match?(/refusing to allow a GitHub App to create or update workflow/)
+    end
+
     # The PR numbers open for this head, or [nil, why] when gh could not answer. A blip in the
     # API is not worth a bump that is already built and committed, so ask again before giving up.
     def self.open_pr_for(upstream_repo, head)
@@ -69,8 +73,16 @@ module Autobump
       # path (GitHub's workflow-scope guard does exactly that), and the evidence dir is gone
       # with the CI container, so this is the only record of what the commit actually carried.
       puts `git -C #{cfg.repo.shellescape} show --oneline --stat HEAD`
-      raise Abort, 'push failed' \
-        unless system('git', '-C', cfg.repo, 'push', '-u', '--force', cfg.push_remote, c.branch)
+      pushed = IO.popen(['git', '-C', cfg.repo, 'push', '-u', '--force', cfg.push_remote, c.branch],
+                        err: %i[child out], &:read)
+      unless $?&.success?
+        puts pushed
+        # the App token cannot touch .github/workflows/**; no number of retries changes that
+        raise Escalate.new('the bot cannot push this branch: it needs the App\'s workflows permission',
+                           c.evidence.dir) if PR.workflow_push_refused?(pushed)
+
+        raise Abort, 'push failed'
+      end
       body = c.evidence.path('pr-body.md')
       File.write(body, pr_body)
       subj = `git -C #{cfg.repo.shellescape} log -1 --format=%s`.strip
