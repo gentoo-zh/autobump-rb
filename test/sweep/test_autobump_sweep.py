@@ -152,6 +152,10 @@ class AutobumpSweepTest(unittest.TestCase):
         self.evidence.mkdir()
         (self.evidence / "escalations.txt").write_text("payload layout changed\n")
         (self.evidence / "tree-added.txt").write_text("usr/lib/libnew.so\n")
+        # portage names an elog "<cat>:<pn>-<ver>:<timestamp>.log", which an artifact refuses
+        elog = self.evidence / "plog" / "elog"
+        elog.mkdir(parents=True)
+        (elog / "app-eselect:eselect-notify-send-0.1:20260904-132524.log").write_text("notice\n")
         (self.evidence / "build.log").write_text(
             "  1000K .......... .......... 71% 80.5M 0s\n"
             + "".join(f"build line {index}\n" for index in range(300))
@@ -349,13 +353,21 @@ class AutobumpSweepTest(unittest.TestCase):
         self.assertIn("build line 299", body)
         self.assertNotIn("build line 0\n", body)
 
+    def test_kept_evidence_can_be_uploaded_as_an_artifact(self):
+        self.run_sweep("4", "--comment")
+
+        kept = self.kept / "cat_escalate-3.0"
+        names = [str(p.relative_to(kept)) for p in kept.rglob("*") if p.is_file()]
+        self.assertTrue(any(name.endswith("20260904-132524.log") for name in names), names)
+        self.assertFalse([name for name in names if set(name) & set(':"<>|*?')], names)
+
     def test_escalation_evidence_is_kept_for_upload(self):
         self.run_sweep("4", "--comment")
 
         kept = self.kept / "cat_escalate-3.0"
         self.assertEqual(
             sorted(path.name for path in kept.iterdir()),
-            ["build.log", "escalations.txt", "tree-added.txt"],
+            ["build.log", "escalations.txt", "plog", "tree-added.txt"],
         )
 
     def test_named_issues_are_not_capped_by_the_run_limit(self):
