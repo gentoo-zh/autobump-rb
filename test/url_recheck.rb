@@ -69,15 +69,27 @@ check 'a reporter that prints one line per finding is read too',
       Autobump::Finalize.flagged_urls(one_line, 'app-editors/cursor'),
       %w[https://downloads.example/app.deb]
 
-# a bump renames the ebuild and changes SRC_URI; a HOMEPAGE it never touched is pre-existing
-bump_diff = <<~DIFF
-  +++ b/app-misc/chatgpt-desktop/chatgpt-desktop-26.901.31953.ebuild
-  +SRC_URI="https://persistent.oaistatic.com/${PV}/ChatGPT.deb"
-  -SRC_URI="https://persistent.oaistatic.com/26.901.20858/ChatGPT.deb"
-DIFF
-check 'the fields a bump touched', Autobump::Finalize.fields_touched(bump_diff), %w[SRC_URI]
-check 'a homepage the bump did not touch is not among them',
-      Autobump::Finalize.fields_touched(bump_diff).include?('HOMEPAGE'), false
+# the shape a real bump commits: the ebuild is copied to the new version, nothing else changes.
+# git shows that as a whole new file, so the fields have to be compared by value.
+old_ebuild = <<~EBUILD
+  EAPI=8
+  DESCRIPTION="ChatGPT desktop"
+  HOMEPAGE="https://chatgpt.com/download/"
+  SRC_URI="https://persistent.oaistatic.com/${PV}/ChatGPT.deb"
+  KEYWORDS="-* ~amd64"
+EBUILD
+copied = old_ebuild.gsub('26.901.20858', '26.901.31953')
+F = Autobump::Finalize.method(:fields_changed)
+check 'a version-only copy changes no field', F.call(old_ebuild, copied, '26.901.20858', '26.901.31953'), []
+check 'a homepage the bump moved is changed',
+      F.call(old_ebuild, copied.sub(/HOMEPAGE=.*/, 'HOMEPAGE="https://openai.com/chatgpt/"'),
+             '26.901.20858', '26.901.31953'), %w[HOMEPAGE]
+check 'a source that moved host is changed',
+      F.call(old_ebuild, copied.sub(%r{https://persistent\.oaistatic\.com}, 'https://dl.example.com'),
+             '26.901.20858', '26.901.31953'), %w[SRC_URI]
+check 'a literal version in the source is normalised away',
+      F.call(old_ebuild.sub('${PV}', '26.901.20858'),
+             copied.sub('${PV}', '26.901.31953'), '26.901.20858', '26.901.31953'), []
 
 check 'a finding on an untouched field is dropped',
       Autobump::Finalize.records_this_bump_touched([[homepage_url, 'HOMEPAGE']], %w[SRC_URI]), []

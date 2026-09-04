@@ -121,8 +121,20 @@ module Autobump
       records.select { |_url, field| field.nil? || touched.include?(field) }
     end
 
-    def self.fields_touched(diff)
-      diff.lines.select { |l| l.start_with?('+') }.filter_map { |l| l[/\A\+[[:space:]]*([A-Z_]+)=/, 1] }.uniq
+    # A version-only copy changes no field: the version is normalised away before the two texts
+    # are compared. A diff cannot answer this - a rename shows the whole file as added, which is
+    # how a homepage nobody touched came back as "changed by this bump".
+    def self.fields_changed(old_text, new_text, old_pv, newver)
+      before = assignments(old_text)
+      after = assignments(new_text.gsub(newver, old_pv))
+      after.reject { |name, value| before[name] == value }.keys
+    end
+
+    def self.assignments(text)
+      text.lines.filter_map do |line|
+        match = line.chomp.match(/\A[[:space:]]*([A-Z][A-Z0-9_]*)=(.*)\z/)
+        [match[1], match[2].strip] if match
+      end.to_h
     end
 
     def self.flagged_urls(scan_output, pkg)
@@ -160,8 +172,10 @@ module Autobump
       net = Dir.chdir(repo) { `pkgcheck scan --commits --net 2>&1`.scrub }
       c.evidence.write('pkgcheck-net.txt', net)
       records = Finalize.flagged_url_records(net, c.pkg)
-      touched = Finalize.fields_touched(`git -C #{repo.shellescape} show --unified=0 HEAD -- #{c.new_ebuild.shellescape}`)
-      records = Finalize.records_this_bump_touched(records, touched)
+      old_path = "#{c.pkg}/#{File.basename(c.old_ebuild)}"
+      old_text = `git -C #{repo.shellescape} show HEAD~1:#{old_path.shellescape} 2>/dev/null`
+      changed = Finalize.fields_changed(old_text, File.read(c.new_ebuild), c.old_pv, c.newver)
+      records = Finalize.records_this_bump_touched(records, changed)
       urls = records.map(&:first).uniq
       return Log.log('pkgcheck URL findings are on fields this bump did not touch') if urls.empty?
 
