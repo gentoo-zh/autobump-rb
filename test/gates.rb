@@ -48,22 +48,30 @@ OUT
 check 'a USE-change refusal is not a flake', Autobump::BuildTest.needs_use_change?(use_change), true
 check 'a mirror timeout is', Autobump::BuildTest.needs_use_change?("Connection timed out\n"), false
 
-# a container has no kernel sources, so linux-info warns the same way for every package
-kernel_notice = [
-  " \e[32m*\e[0m Package:    www-client/ungoogled-chromium-bin-152.0.7977.75_p1:0",
-  " \e[33;01m*\e[0m Unable to find kernel sources at /usr/src/linux",
-  " \e[33;01m*\e[0m Unable to check for the following kernel config options due",
-  " \e[33;01m*\e[0m  - PID_NS - PID_NS is required for sandbox to work",
-  " \e[33;01m*\e[0m You're on your own to make sure they are set if needed.",
-  " \e[32m*\e[0m Final size of installed tree:  767172 KiB"
-].join("\n")
+# portage's save module writes "WARN: setup" and then the body; a container has no kernel
+# sources, so linux-info warns this way for every package that inherits it
+kernel_notice = <<~ELOG
+  WARN: setup
+  Unable to find kernel sources at /usr/src/linux
+  Unable to check for the following kernel config options due
+  to absence of any configured kernel sources or compiled
+  config:
+   - PID_NS - PID_NS is required for sandbox to work
+   - GRKERNSEC - CONFIG_GRKERNSEC breaks sandbox (bug #613668)
+  You're on your own to make sure they are set if needed.
+ELOG
 check 'a kernel-config notice is not a defect',
       Autobump::BuildTest.elog_is_a_defect?(kernel_notice), false
-check 'a real QA warning next to it still is',
-      Autobump::BuildTest.elog_is_a_defect?(kernel_notice + "\n \e[33;01m*\e[0m QA Notice: file does not exist"),
+check 'a QA section next to it still is',
+      Autobump::BuildTest.elog_is_a_defect?(kernel_notice + "QA: install\nQA Notice: file does not exist\n"),
       true
-check 'an elog with no warning at all is still a defect to look at',
-      Autobump::BuildTest.elog_is_a_defect?(" \e[32m*\e[0m Final size: 1 KiB"), true
+check 'an elog whose only warning is something else is a defect',
+      Autobump::BuildTest.elog_is_a_defect?("WARN: postinst\nrun me to finish the install\n"), true
+check 'an elog with no warning section at all is left to a human',
+      Autobump::BuildTest.elog_is_a_defect?("LOG: postinst\nnothing to see\n"), true
+# an INFO section alongside the notice must not be read as a warning of its own
+check 'an info section does not turn the notice into a defect',
+      Autobump::BuildTest.elog_is_a_defect?(kernel_notice + "LOG: postinst\nremember to restart\n"), false
 
 puts '----'
 puts $fail.zero? ? 'gates: all passed' : "gates: #{$fail} failed"
