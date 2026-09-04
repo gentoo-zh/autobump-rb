@@ -90,6 +90,39 @@ module Autobump
     # the URL findings alone: a MissingRemoteId line quotes a URI in parentheses, and rechecking
     # `https://github.com/Acme/etcd')` escalates a bump whose URLs are all fine.
     URL_IN_TEXT = %r{https?://[^\s'"<>]+}
+    HOMEPAGE_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ' \
+                          '(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
+
+    # Homepage checks are browser-facing: some sites reject pkgcheck's HEAD/bot request while
+    # serving the same page to a normal browser. Keep source-archive checks on curl's default
+    # GET so a browser-only response cannot hide a fetch failure.
+    def self.flagged_url_records(scan_output, pkg)
+      current = nil
+      scan_output.each_line.with_object([]) do |line, records|
+        if (header = line[/\A(\S+\/\S+)[[:space:]]*\z/, 1])
+          current = header
+        end
+        # the default reporter groups findings under a header; another one prints
+        # "cat/pn-version: Check: ..." per line. Take the package from whichever is there.
+        mine = current == pkg || line.start_with?("#{pkg}-")
+        next unless mine && line =~ /DeadUrl|RedirectedUrl/
+
+        homepage = line.match?(/\bHOMEPAGE:/)
+        records.concat(line.scan(URL_IN_TEXT).map do |u|
+          [u.sub(/[)\],.;:'"]+\z/, ''), homepage]
+        end)
+      end.uniq
+    end
+
+    def self.flagged_urls(scan_output, pkg)
+      flagged_url_records(scan_output, pkg).map(&:first).uniq
+    end
+
+    def self.url_recheck_command(url, homepage: false)
+      args = ['curl', '-sL', '--max-time', '20']
+      args.concat(['-A', HOMEPAGE_USER_AGENT]) if homepage
+      args + ['-o', '/dev/null', '-w', '%{http_code}', url]
+    end
 
     # The findings the bump added: what the after-scan reports and the baseline did not. A
     # finding the bump REMOVED is not a reason to escalate.
@@ -108,20 +141,6 @@ module Autobump
       bad.all? { |l| l =~ / -> (000|5[0-9][0-9])\z/ } ? :inconclusive : :dead
     end
 
-    def self.flagged_urls(scan_output, pkg)
-      current = nil
-      scan_output.each_line.with_object([]) do |line, urls|
-        if (header = line[/\A(\S+\/\S+)[[:space:]]*\z/, 1])
-          current = header
-        end
-        # the default reporter groups findings under a header; another one prints
-        # "cat/pn-version: Check: ..." per line. Take the package from whichever is there.
-        mine = current == pkg || line.start_with?("#{pkg}-")
-        next unless mine && line =~ /DeadUrl|RedirectedUrl/
-
-        urls.concat(line.scan(URL_IN_TEXT).map { |u| u.sub(/[)\],.;:'"]+\z/, '') })
-      end.uniq
-    end
 
     private
 
@@ -129,11 +148,13 @@ module Autobump
       c = @c; repo = c.cfg.repo
       net = Dir.chdir(repo) { `pkgcheck scan --commits --net 2>&1`.scrub }
       c.evidence.write('pkgcheck-net.txt', net)
-      urls = Finalize.flagged_urls(net, c.pkg)
+      records = Finalize.flagged_url_records(net, c.pkg)
+      urls = records.map(&:first).uniq
       return if urls.empty?
       # array-form curl: a URL with '&' (query strings) must not be split by the shell
       recheck = urls.map do |u|
-        code = IO.popen(['curl', '-sL', '--max-time', '20', '-o', '/dev/null', '-w', '%{http_code}', u], &:read).strip
+        homepage = records.any? { |url, is_homepage| url == u && is_homepage }
+        code = IO.popen(Finalize.url_recheck_command(u, homepage: homepage), &:read).strip
         code = '000' if code.empty? # curl couldn't connect at all -> network-inconclusive marker
         "#{u} -> #{code}"
       end

@@ -22,6 +22,23 @@ SCAN = <<~OUT
     DeadUrl: version 1.0: HOMEPAGE: 404 Client Error for url: https://other.example/gone
 OUT
 
+homepage_scan = <<~OUT
+  app-misc/chatgpt-desktop
+    DeadUrl: version 26.901.31953: HOMEPAGE: 403 Client Error for url: https://chatgpt.com/download/
+OUT
+homepage_url = 'https://chatgpt.com/download/'
+check 'homepage URL is marked for browser recheck',
+      Autobump::Finalize.flagged_url_records(homepage_scan, 'app-misc/chatgpt-desktop'),
+      [[homepage_url, true]]
+check 'homepage recheck uses a browser UA, source recheck does not',
+      Autobump::Finalize.url_recheck_command(homepage_url, homepage: true),
+      ['curl', '-sL', '--max-time', '20', '-A', Autobump::Finalize::HOMEPAGE_USER_AGENT,
+       '-o', '/dev/null', '-w', '%{http_code}', homepage_url]
+check 'source URL recheck keeps curl default UA',
+      Autobump::Finalize.url_recheck_command('https://downloads.example/app.deb'),
+      ['curl', '-sL', '--max-time', '20', '-o', '/dev/null', '-w', '%{http_code}',
+       'https://downloads.example/app.deb']
+
 check 'a URL finding under this package is rechecked, whatever the URL spells',
       Autobump::Finalize.flagged_urls(SCAN, 'app-editors/cursor'),
       %w[https://downloads.example/x/deb/amd64/deb/app_3.19.7_amd64.deb]
