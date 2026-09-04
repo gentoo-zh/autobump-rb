@@ -107,11 +107,22 @@ module Autobump
         mine = current == pkg || line.start_with?("#{pkg}-")
         next unless mine && line =~ /DeadUrl|RedirectedUrl/
 
-        homepage = line.match?(/\bHOMEPAGE:/)
+        field = line[/\b([A-Z_]+):[[:space:]]/, 1]
         records.concat(line.scan(URL_IN_TEXT).map do |u|
-          [u.sub(/[)\],.;:'"]+\z/, ''), homepage]
+          [u.sub(/[)\],.;:'"]+\z/, ''), field]
         end)
       end.uniq
+    end
+
+    # pkgcheck reports the package's URLs, not the bump's. A finding on a field this commit did
+    # not touch is pre-existing - the same scan reports it for the version already in the tree -
+    # and blocking the bump on it asks the wrong person at the wrong time.
+    def self.records_this_bump_touched(records, touched)
+      records.select { |_url, field| field.nil? || touched.include?(field) }
+    end
+
+    def self.fields_touched(diff)
+      diff.lines.select { |l| l.start_with?('+') }.filter_map { |l| l[/\A\+[[:space:]]*([A-Z_]+)=/, 1] }.uniq
     end
 
     def self.flagged_urls(scan_output, pkg)
@@ -149,11 +160,14 @@ module Autobump
       net = Dir.chdir(repo) { `pkgcheck scan --commits --net 2>&1`.scrub }
       c.evidence.write('pkgcheck-net.txt', net)
       records = Finalize.flagged_url_records(net, c.pkg)
+      touched = Finalize.fields_touched(`git -C #{repo.shellescape} show --unified=0 HEAD -- #{c.new_ebuild.shellescape}`)
+      records = Finalize.records_this_bump_touched(records, touched)
       urls = records.map(&:first).uniq
-      return if urls.empty?
+      return Log.log('pkgcheck URL findings are on fields this bump did not touch') if urls.empty?
+
       # array-form curl: a URL with '&' (query strings) must not be split by the shell
       recheck = urls.map do |u|
-        homepage = records.any? { |url, is_homepage| url == u && is_homepage }
+        homepage = records.any? { |url, field| url == u && field == 'HOMEPAGE' }
         code = IO.popen(Finalize.url_recheck_command(u, homepage: homepage), &:read).strip
         code = '000' if code.empty? # curl couldn't connect at all -> network-inconclusive marker
         "#{u} -> #{code}"

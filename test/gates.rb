@@ -48,6 +48,23 @@ OUT
 check 'a USE-change refusal is not a flake', Autobump::BuildTest.needs_use_change?(use_change), true
 check 'a mirror timeout is', Autobump::BuildTest.needs_use_change?("Connection timed out\n"), false
 
+# a container has no kernel sources, so linux-info warns the same way for every package
+kernel_notice = [
+  " \e[32m*\e[0m Package:    www-client/ungoogled-chromium-bin-152.0.7977.75_p1:0",
+  " \e[33;01m*\e[0m Unable to find kernel sources at /usr/src/linux",
+  " \e[33;01m*\e[0m Unable to check for the following kernel config options due",
+  " \e[33;01m*\e[0m  - PID_NS - PID_NS is required for sandbox to work",
+  " \e[33;01m*\e[0m You're on your own to make sure they are set if needed.",
+  " \e[32m*\e[0m Final size of installed tree:  767172 KiB"
+].join("\n")
+check 'a kernel-config notice is not a defect',
+      Autobump::BuildTest.elog_is_a_defect?(kernel_notice), false
+check 'a real QA warning next to it still is',
+      Autobump::BuildTest.elog_is_a_defect?(kernel_notice + "\n \e[33;01m*\e[0m QA Notice: file does not exist"),
+      true
+check 'an elog with no warning at all is still a defect to look at',
+      Autobump::BuildTest.elog_is_a_defect?(" \e[32m*\e[0m Final size: 1 KiB"), true
+
 puts '----'
 puts $fail.zero? ? 'gates: all passed' : "gates: #{$fail} failed"
 exit($fail.zero? ? 0 : 1)
