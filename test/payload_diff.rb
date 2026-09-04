@@ -225,6 +225,35 @@ check 'a word is not a hash, so a renamed script stays structural', rm, %w[app/d
 rm, = F.call(["app/lib/libfoo-Bz6qKO3a.so"], ["app/lib/libbar-CVu4teRk.so"], '1', '2')
 check 'a library is not a chunk', rm, ["app/lib/libfoo-Bz6qKO3a.so"]
 
+# a bundle output directory: every name is a content hash, so a rebuild churns an arbitrary
+# subset - claude-desktop's ion-dist/assets/v1 holds 2760 of them and drops 16 whose ids moved
+bundle = 'app/ion-dist/assets/v1'
+survivors = (1..40).map { |i| "#{bundle}/#{format('%048x', i)}-Chunk#{i}Aa.js" }
+rm = %W[#{bundle}/c09ddf347-mnuumf4t.js #{bundle}/shared-5--MfpzEVV.js]
+ad = %W[#{bundle}/d41d8cd98-QQzzWWpp.js #{bundle}/shared-9--BbCcDdE.js]
+left_rm, left_ad, = F.call(rm, ad, '1', '2', new_tree: survivors + ad)
+check 'a rebuilt bundle directory folds the ids that moved', [left_rm, left_ad], [[], []]
+
+left_rm, = F.call(rm, [ad.first], '1', '2', new_tree: survivors + [ad.first])
+check 'a bundle directory that came back smaller still escalates', left_rm.size, 2
+
+extra = "#{bundle}/#{'e' * 48}-NewChunkA.js"
+left_rm, = F.call(rm + ["#{bundle}/index.html"], ad + [extra], '1', '2',
+                  new_tree: survivors + ad + [extra])
+check 'a named file dropped from a bundle directory is still a removal',
+      left_rm, ["#{bundle}/index.html"]
+
+tiny = %w[app/blobs/beta-Zz98Yy76.bin app/blobs/keep-Mm44Nn55.bin]
+left_rm, = F.call(%w[app/blobs/alpha-Ab12Cd34.bin], %w[app/blobs/beta-Zz98Yy76.bin], '1', '2',
+                  new_tree: tiny)
+check 'two hash-named files do not make a directory a bundle',
+      left_rm, %w[app/blobs/alpha-Ab12Cd34.bin]
+
+named = (1..40).map { |i| "app/images/icon-#{i}.png" }
+left_rm, = F.call(%w[app/images/clawd-magnifier.gif], %w[app/images/clawd-lens.gif], '1', '2',
+                  new_tree: named + %w[app/images/clawd-lens.gif])
+check 'an ordinary directory is not a bundle', left_rm, %w[app/images/clawd-magnifier.gif]
+
 puts '----'
 if $fail.zero?
   puts 'payload_diff: all passed'

@@ -68,7 +68,7 @@ module Autobump
     #     (`find -type f` lists no directory entries, so a renamed dir shows up as its files
     #     changing dirname, which this rule does not pair). Fold only on an exact 1:1 match;
     #     with two candidates for one key a real removal could hide behind a coincidence.
-    def self.fold_benign(removed, added, old_pv, newver)
+    def self.fold_benign(removed, added, old_pv, newver, new_tree: nil)
       renames = version_forms(old_pv).zip(version_forms(newver))
       real_removed = removed.reject { |p| renames.any? { |old, new| added.include?(p.gsub(old, new)) } }
       real_added   = added.reject   { |p| renames.any? { |old, new| removed.include?(p.gsub(new, old)) } }
@@ -155,7 +155,37 @@ module Autobump
       churned += (real_removed.size - kept_removed.size) + (real_added.size - kept_added.size)
       real_removed, real_added = kept_removed, kept_added
 
+      # (5) a bundle output directory. claude-desktop's ion-dist/assets/v1 holds 2760 files and
+      #     every one of them is named after its content, so a rebuild churns an arbitrary
+      #     subset and no per-name key pairs the ones whose id moved. When nine in ten names in
+      #     a directory are content hashes, the directory is bundler output: fold its churn
+      #     while it did not come back smaller. The file itself must be hash-named too, so an
+      #     index.html dropped from such a directory is still a removal a maintainer sees.
+      real_removed, real_added, folded =
+        fold_bundle_dirs(real_removed, real_added, removed, added, new_tree)
+      churned += folded
+
       [real_removed, real_added, churned]
+    end
+
+    def self.hash_named?(path)
+      base = File.basename(path)
+      base.match?(FINGERPRINT_NAME) || base.match?(HASH_NAME)
+    end
+
+    def self.fold_bundle_dirs(real_removed, real_added, removed, added, new_tree)
+      return [real_removed, real_added, 0] if new_tree.nil? || new_tree.empty?
+
+      bundle_dirs = new_tree.group_by { |p| File.dirname(p) }
+                            .select { |_dir, files| files.size >= 8 && files.count { |f| hash_named?(f) } * 10 >= files.size * 9 }
+                            .keys
+      per_dir = lambda { |paths| paths.group_by { |p| File.dirname(p) }.transform_values(&:size) }
+      gained, lost = per_dir.call(added), per_dir.call(removed)
+      rebuilt = bundle_dirs.select { |dir| gained.fetch(dir, 0) >= lost.fetch(dir, 0) }
+      churn = ->(p) { rebuilt.include?(File.dirname(p)) && hash_named?(p) }
+      kept_removed, kept_added = real_removed.reject(&churn), real_added.reject(&churn)
+      [kept_removed, kept_added,
+       (real_removed.size - kept_removed.size) + (real_added.size - kept_added.size)]
     end
 
     # The shared safety rule behind (2), (3) and (4): a removal folds only when exactly one
@@ -271,7 +301,9 @@ module Autobump
       File.write(ev('tree-added.txt'),   comm('-13', ev('tree-old.txt'), ev('tree-new.txt')))
       removed = File.readlines(ev('tree-removed.txt')).map(&:chomp).reject(&:empty?)
       added   = File.readlines(ev('tree-added.txt')).map(&:chomp).reject(&:empty?)
-      real_removed, real_added, churned = self.class.fold_benign(removed, added, c.old_pv, c.newver)
+      new_tree = File.readlines(ev('tree-new.txt')).map(&:chomp).reject(&:empty?)
+      real_removed, real_added, churned =
+        self.class.fold_benign(removed, added, c.old_pv, c.newver, new_tree: new_tree)
       # always write both real (structural-only) files + the churn count, so the PR body can tell
       # "compared, no structural change" from "not compared" and can note the asset churn.
       File.write(ev('tree-removed-real.txt'), real_removed.empty? ? '' : real_removed.join("\n") + "\n")
