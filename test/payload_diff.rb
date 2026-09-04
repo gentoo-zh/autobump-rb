@@ -187,6 +187,26 @@ check 'a bare number is not used as a substitution key',
 rm, = F.call(%w[usr/share/icons/icon2.png], %w[usr/share/icons/icon3.png], '2_p1', '3_p1')
 check 'a dropped icon is not a version rename', rm, %w[usr/share/icons/icon2.png]
 
+# a vite bundle keeps a stable id in front of the build hash: only the last token rehashes
+rm, ad, = F.call(%w[app/assets/chunk-2GRJ4B5K-Dtk3djQK.js app/assets/chunk-2Q5K7J3B-COdn04Wu.js],
+                 %w[app/assets/chunk-2GRJ4B5K-DrXvAXa3.js app/assets/chunk-2Q5K7J3B-BkL9zzQp.js],
+                 '1', '2')
+check 'a rehash behind a stable id folds', [rm, ad], [[], []]
+
+# ...and two different ids must not pair with each other
+rm, = F.call(%w[app/assets/chunk-2GRJ4B5K-Dtk3djQK.js],
+             %w[app/assets/chunk-9ZZZZZZZ-DrXvAXa3.js], '1', '2')
+check 'different stable ids stay structural', rm, %w[app/assets/chunk-2GRJ4B5K-Dtk3djQK.js]
+
+# a deployment fingerprint rehashes in front of the chunk id
+digest_a = '3' + 'a' * 47
+digest_b = '4' + 'b' * 47
+rm, ad, = F.call(["app/dist/#{digest_a}-CVu4teRk.js"], ["app/dist/#{digest_b}-CVu4teRk.js"], '1', '2')
+check 'a fingerprint rehash folds', [rm, ad], [[], []]
+
+rm, = F.call(["app/dist/#{digest_a}-CVu4teRk.js"], ["app/dist/#{digest_b}-DifferentX.js"], '1', '2')
+check 'a fingerprint file with no counterpart stays structural', rm, ["app/dist/#{digest_a}-CVu4teRk.js"]
+
 puts '----'
 if $fail.zero?
   puts 'payload_diff: all passed'
