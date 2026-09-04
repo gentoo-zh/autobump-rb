@@ -171,6 +171,13 @@ check_eq 'a failing query answers nothing', open, nil
 check_eq 'and carries the reason gh gave', reason, 'gh: HTTP 502 Bad Gateway'
 check_eq 'after retrying', elapsed > 3, true
 
+# a push GitHub refuses for the App's permissions is not something a retry fixes
+refused = " ! [remote rejected]  b -> b (refusing to allow a GitHub App to create or update " \
+          "workflow `.github/workflows/overlay.toml` without `workflows` permission)"
+check_eq 'a workflows-permission refusal is recognised', Autobump::PR.workflow_push_refused?(refused), true
+check_eq 'an ordinary push failure is not',
+         Autobump::PR.workflow_push_refused?('error: failed to push some refs to ...'), false
+
 puts '----'
 puts "pr_body: #{$fail.zero? ? 'all passed' : "#{$fail} failed"}"
 exit($fail.zero? ? 0 : 1)
