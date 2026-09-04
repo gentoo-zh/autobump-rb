@@ -27,9 +27,9 @@ homepage_scan = <<~OUT
     DeadUrl: version 26.901.31953: HOMEPAGE: 403 Client Error for url: https://chatgpt.com/download/
 OUT
 homepage_url = 'https://chatgpt.com/download/'
-check 'homepage URL is marked for browser recheck',
+check 'a finding carries the field it is about',
       Autobump::Finalize.flagged_url_records(homepage_scan, 'app-misc/chatgpt-desktop'),
-      [[homepage_url, true]]
+      [[homepage_url, 'HOMEPAGE']]
 check 'homepage recheck uses a browser UA, source recheck does not',
       Autobump::Finalize.url_recheck_command(homepage_url, homepage: true),
       ['curl', '-sL', '--max-time', '20', '-A', Autobump::Finalize::HOMEPAGE_USER_AGENT,
@@ -68,6 +68,22 @@ one_line = "app-editors/cursor-3.19.7: DeadUrl: SRC_URI: 404 Client Error for ur
 check 'a reporter that prints one line per finding is read too',
       Autobump::Finalize.flagged_urls(one_line, 'app-editors/cursor'),
       %w[https://downloads.example/app.deb]
+
+# a bump renames the ebuild and changes SRC_URI; a HOMEPAGE it never touched is pre-existing
+bump_diff = <<~DIFF
+  +++ b/app-misc/chatgpt-desktop/chatgpt-desktop-26.901.31953.ebuild
+  +SRC_URI="https://persistent.oaistatic.com/${PV}/ChatGPT.deb"
+  -SRC_URI="https://persistent.oaistatic.com/26.901.20858/ChatGPT.deb"
+DIFF
+check 'the fields a bump touched', Autobump::Finalize.fields_touched(bump_diff), %w[SRC_URI]
+check 'a homepage the bump did not touch is not among them',
+      Autobump::Finalize.fields_touched(bump_diff).include?('HOMEPAGE'), false
+
+check 'a finding on an untouched field is dropped',
+      Autobump::Finalize.records_this_bump_touched([[homepage_url, 'HOMEPAGE']], %w[SRC_URI]), []
+check 'a finding on a field the bump changed is kept',
+      Autobump::Finalize.records_this_bump_touched([['https://x/a.deb', 'SRC_URI']], %w[SRC_URI]),
+      [['https://x/a.deb', 'SRC_URI']]
 
 puts '----'
 puts $fail.zero? ? 'url_recheck: all passed' : "url_recheck: #{$fail} failed"

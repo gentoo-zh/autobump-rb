@@ -35,6 +35,31 @@ module Autobump
     # would be attributed to the bump by a prefix match. Portage writes either layout:
     #   flat        elog/<cat>:<pn>-<ver>:<ts>.log
     #   split-elog  elog/<cat>/<pn>-<ver>:<ts>.log
+    # linux-info writes this in any container: there are no kernel sources to read, so every
+    # package that inherits it warns the same way and it says nothing about the bump.
+    KERNEL_CONFIG_NOTICE = Regexp.union(
+      /kernel sources/, /kernel config options/, /Linux Kernel version/, /\Aconfig:\z/,
+      /configured kernel sources/, /make sure they are set/, /\A-[[:space:]]+[A-Z0-9_]+[[:space:]]+-/
+    )
+    # ewarn is yellow, eerror red: only those two decide the gate. An einfo in the same file
+    # ("Final size of build directory") is not a defect.
+    WARNING_LINE = /\e\[(?:33;01|31;01)m/
+
+    # What the gate decides on: a saved elog escalates unless every warning in it is the
+    # kernel-config notice.
+    def self.elog_is_a_defect?(elog)
+      !kernel_config_notice_only?(elog)
+    end
+
+    def self.kernel_config_notice_only?(elog)
+      warnings = elog.lines.select { |l| l.match?(WARNING_LINE) }
+                     .map { |l| l.gsub(/\e\[[0-9;]*m/, '').strip.sub(/\A\*[[:space:]]*/, '') }
+                     .reject(&:empty?)
+      return false if warnings.empty?
+
+      warnings.all? { |l| l.match?(KERNEL_CONFIG_NOTICE) }
+    end
+
     def self.needs_use_change?(emerge_output)
       emerge_output.include?('The following USE changes are necessary')
     end
@@ -183,7 +208,10 @@ module Autobump
       if elog_files.any?
         dump = elog_files.map { |f| `#{cfg.sudo} cat #{f.shellescape} 2>/dev/null` }.join
         puts dump.lines.first(25).join
-        raise Escalate.new('emerge produced a qa/warn/error elog (fails the CI elog gate)', c.evidence.dir)
+        raise Escalate.new('emerge produced a qa/warn/error elog (fails the CI elog gate)',
+                           c.evidence.dir) if BuildTest.elog_is_a_defect?(dump)
+
+        Log.log 'elog is only the kernel-config notice a container always produces; not a defect'
       end
       smoke_version
       gui_probe if c.gui && !`command -v Xvfb 2>/dev/null`.strip.empty?
