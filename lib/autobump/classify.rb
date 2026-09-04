@@ -120,13 +120,25 @@ module Autobump
       # pins() below strips whole comment lines but keeps inline ones on purpose (it only
       # records evidence, never escalates), so it must not get this stricter masking.
       # a pin the rewrite spec updates every bump is not a stale pin: exclude that one
-      # variable, and escalate only if some OTHER pin is left unhandled.
+      # variable, and escalate only if some OTHER pin is left unhandled. A _TAG/_COMMIT
+      # assignment derived from ${PV} is also not a pin: the copied ebuild resolves it to
+      # the target version itself.
       pinned = @text.lines.map { |l| l.sub(/#.*/, '') }
                     .select { |l| l =~ /_COMMIT=|_TAG=/ }
                     .reject { |l| @rewrite_var && l =~ /\A[[:space:]]*#{Regexp.escape(@rewrite_var.to_s)}=/ }
+                    .reject { |l| self.class.version_derived_source_pin?(l) }
       return nil if pinned.empty?
       return nil if @text.scan(%r{https://[^ "\r\n]+}).any? { |u| u =~ /(-deps|-vendor|-crates|node_modules)\.tar\./ }
       'ebuild pins a source commit/tag but has no per-version vendor artifact - verify the pin was bumped for the new version, do not version-copy'
+    end
+
+    def self.version_derived_source_pin?(line)
+      line.match?(/(?:[A-Z_]+_(?:COMMIT|TAG))=(?:["'][^"']*|[^[:space:]]*)\$\{?P(?:V)?\}?/)
+    end
+
+    def self.deps_artifact_url(url, pn:, old_pv:, newver:)
+      url.gsub(Regexp.new(Regexp.escape(old_pv)), newver)
+         .gsub('${P}', "#{pn}-#{newver}").gsub('${PV}', newver).gsub('${PN}', pn)
     end
 
     def deps_artifact
@@ -134,8 +146,9 @@ module Autobump
       # so exclude newline/CR to match grep's per-line extraction exactly.
       url = @text.scan(%r{https://[^ "\r\n]+}).find { |u| u =~ /(-deps|-vendor|-crates|node_modules)\.tar\./ }
       return nil unless url
-      t = url.gsub('${P}', "#{@pn}-#{@newver}").gsub('${PV}', @newver).gsub('${PN}', @pn)
-      t = t.gsub(Regexp.new(@old_pv.gsub('.', '\\.')), @newver)
+      # Rewrite literal old-version paths before expanding ${P}/${PV}: otherwise an old version
+      # that prefixes the target (2026.2 -> 2026.2.1) is replaced a second time.
+      t = self.class.deps_artifact_url(url, pn: @pn, old_pv: @old_pv, newver: @newver)
       # only ${P}/${PV}/${PN} are substituted above; a URL built from any other variable
       # (${MY_PN}, ${MY_PV}) would be curl'd literally and answer 404 for a bundle that exists
       if t.include?('${')

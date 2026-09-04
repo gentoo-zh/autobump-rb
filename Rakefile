@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-task default: %i[syntax sweep decisions pr_body heavy_dep cli_flags payload_diff rewrite gui_probe build_dispatch fetch_failure sh_timeout distfiles_outcome preflight_guards version_compare url_recheck remote_pick gates]
+task default: %i[syntax sweep decisions pr_body heavy_dep cli_flags payload_diff rewrite gui_probe build_dispatch fetch_failure sh_timeout distfiles_outcome deps_artifact_url dynamic_source_pin preflight_guards version_compare url_recheck remote_pick gates]
 
 desc 'ruby -c on all sources'
 task :syntax do
@@ -94,4 +94,14 @@ task :sweep do
     next
   end
   Dir['test/sweep/*.py'].sort.each { |f| sh "python3 #{f}" }
+end
+
+desc 'the vendor-artifact URL a version bump probes (hermetic)'
+task :deps_artifact_url do
+  sh 'ruby test/deps_artifact_url.rb'
+end
+
+desc 'which source pins a version copy updates by itself (hermetic)'
+task :dynamic_source_pin do
+  sh 'ruby test/dynamic_source_pin.rb'
 end
