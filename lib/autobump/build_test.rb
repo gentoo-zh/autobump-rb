@@ -43,7 +43,9 @@ module Autobump
     )
     # ewarn is yellow, eerror red: only those two decide the gate. An einfo in the same file
     # ("Final size of build directory") is not a defect.
-    WARNING_LINE = /\e\[(?:33;01|31;01)m/
+    # portage's save module writes one section per class: a "WARN: setup" header and then the
+    # message body. Only WARN, QA and ERROR sections decide the gate; LOG and INFO do not.
+    ELOG_SECTION = /\A([A-Z]+):[[:space:]]+\S+[[:space:]]*\z/
 
     # What the gate decides on: a saved elog escalates unless every warning in it is the
     # kernel-config notice.
@@ -52,9 +54,14 @@ module Autobump
     end
 
     def self.kernel_config_notice_only?(elog)
-      warnings = elog.lines.select { |l| l.match?(WARNING_LINE) }
-                     .map { |l| l.gsub(/\e\[[0-9;]*m/, '').strip.sub(/\A\*[[:space:]]*/, '') }
-                     .reject(&:empty?)
+      klass = nil
+      warnings = elog.lines.each_with_object([]) do |line, kept|
+        if (match = line.match(ELOG_SECTION))
+          klass = match[1]
+          next
+        end
+        kept << line.strip if %w[WARN QA ERROR].include?(klass) && !line.strip.empty?
+      end
       return false if warnings.empty?
 
       warnings.all? { |l| l.match?(KERNEL_CONFIG_NOTICE) }
