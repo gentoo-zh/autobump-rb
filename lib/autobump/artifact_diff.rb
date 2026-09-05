@@ -70,6 +70,12 @@ module Autobump
     #     with two candidates for one key a real removal could hide behind a coincidence.
     def self.fold_benign(removed, added, old_pv, newver, new_tree: nil)
       renames = version_forms(old_pv).zip(version_forms(newver))
+      # the payload's top directory usually carries the package version, so a directory read
+      # literally never matches across a bump: rebased-bin ships
+      # rebased-bin-1.1.14/lib/build-marker-IC-262.9437.SNAPSHOT and moves both numbers at once.
+      # Only the package's own version is blanked, so a lib/python3.12 stays what it is.
+      forms = (version_forms(old_pv) + version_forms(newver)).sort_by { |f| -f.length }
+      dir_of = ->(p) { forms.reduce(File.dirname(p)) { |acc, form| acc.gsub(form, VER_HOLE) } }
       real_removed = removed.reject { |p| renames.any? { |old, new| added.include?(p.gsub(old, new)) } }
       real_added   = added.reject   { |p| renames.any? { |old, new| removed.include?(p.gsub(new, old)) } }
       churned = 0
@@ -83,7 +89,7 @@ module Autobump
         match = File.basename(p).match(FINGERPRINT_NAME)
         next if match.nil?
 
-        "#{File.dirname(p)}/#{VER_HOLE}-#{match[:chunk]}#{match[:ext]}"
+        "#{dir_of.call(p)}/#{VER_HOLE}-#{match[:chunk]}#{match[:ext]}"
       end
       real_removed, real_added, folded =
         fold_pairs(real_removed, real_added,
@@ -105,7 +111,7 @@ module Autobump
         run = match[:run]
         next unless run.match?(/\d/) || (run.match?(/[a-z]/) && run.match?(/[A-Z]/))
 
-        "#{File.dirname(p)}/#{match[:stem]}#{VER_HOLE}#{match[:ext]}"
+        "#{dir_of.call(p)}/#{match[:stem]}#{VER_HOLE}#{match[:ext]}"
       end
       real_removed, real_added, folded =
         fold_pairs(real_removed, real_added, drop_added: true,
@@ -117,7 +123,7 @@ module Autobump
       #     3.6.2.85969 -> 3.6.3.86383, so (1) cannot pair it by the package version.
       real_removed, real_added, folded =
         fold_pairs(real_removed, real_added, candidate: ->(_p) { true },
-                   key: ->(p) { "#{File.dirname(p)}/#{File.basename(p).gsub(/\d+(?:\.\d+)+/, VER_HOLE)}" })
+                   key: ->(p) { "#{dir_of.call(p)}/#{File.basename(p).gsub(/\d+(?:\.\d+)+/, VER_HOLE)}" })
       churned += folded
 
       # (4) a renumbered bundler chunk. Webpack numbers chunks per build, so a rebuilt
@@ -138,7 +144,7 @@ module Autobump
         !run.nil? && content_hash_run?(run)
       end
       chunks_per_dir = lambda do |paths|
-        paths.select(&chunk).group_by { |p| File.dirname(p) }.transform_values(&:size)
+        paths.select(&chunk).group_by(&dir_of).transform_values(&:size)
       end
       # counted from the diff as it arrived: rule (2) discards hash-bearing additions on sight,
       # and counting what is left would make every rebuilt directory look like it shrank
@@ -149,20 +155,21 @@ module Autobump
       # a rebuild renames what was there: a directory that only gained chunks did not rebuild,
       # and one that came back smaller lost something a maintainer has to see
       rebuilt_dirs = gained.select { |dir, n| lost.fetch(dir, 0).positive? && n >= lost[dir] }.keys
-      renumbered = ->(p) { chunk.call(p) && rebuilt_dirs.include?(File.dirname(p)) }
+      renumbered = ->(p) { chunk.call(p) && rebuilt_dirs.include?(dir_of.call(p)) }
       kept_removed = real_removed.reject(&renumbered)
       kept_added = real_added.reject(&renumbered)
       churned += (real_removed.size - kept_removed.size) + (real_added.size - kept_added.size)
       real_removed, real_added = kept_removed, kept_added
 
-      # (5) a bundle output directory. claude-desktop's ion-dist/assets/v1 holds 2760 files and
-      #     every one of them is named after its content, so a rebuild churns an arbitrary
-      #     subset and no per-name key pairs the ones whose id moved. When nine in ten names in
-      #     a directory are content hashes, the directory is bundler output: fold its churn
-      #     while it did not come back smaller. The file itself must be hash-named too, so an
-      #     index.html dropped from such a directory is still a removal a maintainer sees.
+      # (5) a bundle output directory. claude-desktop's ion-dist/assets/v1 holds 2760 files
+      #     named after their content and cursor's cursor-agent-host/dist holds 116 numbered
+      #     chunks; a rebuild churns an arbitrary subset of either, and no per-name key pairs
+      #     the ones that moved. When nine names in ten are bundler-generated the directory is
+      #     bundler output: fold its churn while what survives there outnumbers what it lost.
+      #     The file itself must be bundler-named too, so an index.html dropped from such a
+      #     directory is still a removal a maintainer sees.
       real_removed, real_added, folded =
-        fold_bundle_dirs(real_removed, real_added, removed, added, new_tree)
+        fold_bundle_dirs(real_removed, real_added, removed, new_tree, dir_of)
       churned += folded
 
       [real_removed, real_added, churned]
@@ -173,16 +180,22 @@ module Autobump
       base.match?(FINGERPRINT_NAME) || base.match?(HASH_NAME)
     end
 
-    def self.fold_bundle_dirs(real_removed, real_added, removed, added, new_tree)
+    def self.bundler_named?(path)
+      File.basename(path).match?(/\A\d+#{CHUNK_EXT.source}/o) || hash_named?(path)
+    end
+
+    def self.fold_bundle_dirs(real_removed, real_added, removed, new_tree, dir_of)
       return [real_removed, real_added, 0] if new_tree.nil? || new_tree.empty?
 
-      bundle_dirs = new_tree.group_by { |p| File.dirname(p) }
-                            .select { |_dir, files| files.size >= 8 && files.count { |f| hash_named?(f) } * 10 >= files.size * 9 }
-                            .keys
-      per_dir = lambda { |paths| paths.group_by { |p| File.dirname(p) }.transform_values(&:size) }
-      gained, lost = per_dir.call(added), per_dir.call(removed)
-      rebuilt = bundle_dirs.select { |dir| gained.fetch(dir, 0) >= lost.fetch(dir, 0) }
-      churn = ->(p) { rebuilt.include?(File.dirname(p)) && hash_named?(p) }
+      survivors = new_tree.group_by(&dir_of)
+      bundle_dirs = survivors.select do |_dir, files|
+        files.size >= 8 && files.count { |f| bundler_named?(f) } * 10 >= files.size * 9
+      end.keys
+      lost = removed.group_by(&dir_of).transform_values(&:size)
+      # what survives is the check: cursor's dist coming back with 116 chunks after dropping 26
+      # is a rebuild repartitioning its modules, and one coming back with 3 is not
+      rebuilt = bundle_dirs.select { |dir| survivors[dir].size >= lost.fetch(dir, 0) }
+      churn = ->(p) { rebuilt.include?(dir_of.call(p)) && bundler_named?(p) }
       kept_removed, kept_added = real_removed.reject(&churn), real_added.reject(&churn)
       [kept_removed, kept_added,
        (real_removed.size - kept_removed.size) + (real_added.size - kept_added.size)]
