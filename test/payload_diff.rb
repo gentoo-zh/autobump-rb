@@ -234,8 +234,10 @@ ad = %W[#{bundle}/d41d8cd98-QQzzWWpp.js #{bundle}/shared-9--BbCcDdE.js]
 left_rm, left_ad, = F.call(rm, ad, '1', '2', new_tree: survivors + ad)
 check 'a rebuilt bundle directory folds the ids that moved', [left_rm, left_ad], [[], []]
 
-left_rm, = F.call(rm, [ad.first], '1', '2', new_tree: survivors + [ad.first])
-check 'a bundle directory that came back smaller still escalates', left_rm.size, 2
+collapsed = survivors.first(9)
+gone = survivors.last(31)
+left_rm, = F.call(gone, [], '1', '2', new_tree: collapsed)
+check 'a bundle directory that lost more than it kept still escalates', left_rm.size, 31
 
 extra = "#{bundle}/#{'e' * 48}-NewChunkA.js"
 left_rm, = F.call(rm + ["#{bundle}/index.html"], ad + [extra], '1', '2',
@@ -248,6 +250,27 @@ left_rm, = F.call(%w[app/blobs/alpha-Ab12Cd34.bin], %w[app/blobs/beta-Zz98Yy76.b
                   new_tree: tiny)
 check 'two hash-named files do not make a directory a bundle',
       left_rm, %w[app/blobs/alpha-Ab12Cd34.bin]
+
+# cursor's cursor-agent-host/dist repartitions: 135 numbered chunks come back as 116
+dist = 'app/extensions/cursor-agent-host/dist'
+kept = (1000..1115).map { |i| "#{dist}/#{i}.js" }
+dropped = (2000..2025).map { |i| "#{dist}/#{i}.js" }
+fresh = (3000..3006).map { |i| "#{dist}/#{i}.js" }
+left_rm, left_ad, = F.call(dropped, fresh, '3.19.12', '3.19.13', new_tree: kept + fresh)
+check 'a repartitioned chunk directory folds even though it came back smaller',
+      [left_rm, left_ad], [[], []]
+
+# rebased-bin carries the package version in the top directory and its own build number in the
+# file, so neither number matches on its own
+left_rm, left_ad, = F.call(%w[rebased-bin-1.1.14/lib/build-marker-IC-262.9437.SNAPSHOT],
+                           %w[rebased-bin-1.1.15/lib/build-marker-IC-262.10315.SNAPSHOT],
+                           '1.1.14', '1.1.15')
+check 'a versioned directory does not hide an independently-versioned file',
+      [left_rm, left_ad], [[], []]
+
+left_rm, = F.call(%w[rebased-bin-1.1.14/lib/build-marker-IC-262.9437.SNAPSHOT],
+                  %w[rebased-bin-1.1.15/lib/other-marker-IC-262.10315.SNAPSHOT], '1.1.14', '1.1.15')
+check 'a file that changed name across that directory is still a removal', left_rm.size, 1
 
 named = (1..40).map { |i| "app/images/icon-#{i}.png" }
 left_rm, = F.call(%w[app/images/clawd-magnifier.gif], %w[app/images/clawd-lens.gif], '1', '2',
