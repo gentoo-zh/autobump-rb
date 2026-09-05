@@ -299,6 +299,19 @@ class AutobumpSweepTest(unittest.TestCase):
         self.assertIn("#2  skip (cat/done 1.0 bumped 2026-09-01)", result.stdout)
         self.assertEqual(self.engine_calls(), [])
 
+    def test_retry_runs_a_recorded_issue_again(self):
+        result = self.run_sweep("2", "--retry")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("skip (cat/done 1.0 bumped", result.stdout)
+        self.assertEqual([call[0] for call in self.engine_calls()], ["2"])
+
+    def test_retry_without_named_issues_still_honours_the_ledger(self):
+        result = self.run_sweep("--retry")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("#2  skip (cat/done 1.0 bumped 2026-09-01)", result.stdout)
+
     def test_per_run_limit(self):
         result = self.run_sweep("--limit", "1")
 
