@@ -123,7 +123,9 @@ class AutobumpWorkflowContractTest(unittest.TestCase):
                 uses = step.get("uses") or ""
                 with_ = step.get("with") or {}
                 written.update(re.findall(r"--delta \"?([^\" ]+\.json)", run))
-                if uses.startswith("actions/upload-artifact") and "delta" in str(with_.get("name", "")):
+                # the plan's own delta has its own test in test_bundles_workflow.py
+                if (uses.startswith("actions/upload-artifact") and "delta" in str(with_.get("name", ""))
+                        and name != "plan"):
                     uploaded.add((with_["name"], with_["path"]))
                 if uses.startswith("actions/download-artifact") and "delta" in str(with_.get("pattern", "")):
                     downloaded.add((with_["pattern"], with_.get("path", "")))
