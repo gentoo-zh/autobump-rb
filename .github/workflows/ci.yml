@@ -8,6 +8,14 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.2'
+      # test/sweep drives the overlay's scripts and workflows; without a checkout rake skips it
+      - uses: actions/checkout@v4
+        with:
+          repository: gentoo-zh/overlay
+          ref: master
+          path: overlay
       # rake's default task is the suite; naming files here left six of them unrun
       - name: suite
+        env:
+          AUTOBUMP_OVERLAY: ${{ github.workspace }}/overlay
         run: rake
