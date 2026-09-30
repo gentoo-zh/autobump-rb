@@ -61,6 +61,7 @@ elif args[:2] == ["issue", "view"]:
         "15": "[nvchecker] cat/silent can be bump to 11.0",
         "12": "[nvchecker] cat/ahead can be bump to 9.0",
         "9": "[nvchecker] cat/binary can be bump to 8.0",
+        "17": "[nvchecker] cat/missing can be bump to 13.0",
     }
     if args[2] == "10":
         raise SystemExit(1)
@@ -102,6 +103,12 @@ elif issue == "4":
         raise SystemExit(0)
     print(">> current: 2.0 -> target: 3.0")
     print(f"== evidence: {os.environ['EVIDENCE_DIR']} ==")
+    raise SystemExit(3)
+elif issue == "17":
+    print(
+        "== not mechanically safe (upstream distfile for 13.0 is missing (404/403), not a slow mirror); "
+        f"evidence: {os.environ['EVIDENCE_DIR']} =="
+    )
     raise SystemExit(3)
 elif issue == "5":
     print(f"== evidence: {os.environ['EVIDENCE_DIR']} ==")
@@ -198,6 +205,9 @@ class AutobumpSweepTest(unittest.TestCase):
                 autobump = true
 
                 ["cat/binary"]
+                autobump = true
+
+                ["cat/missing"]
                 autobump = true
 
                 ["cat/regex"]
@@ -347,6 +357,16 @@ class AutobumpSweepTest(unittest.TestCase):
                 and "payload layout changed" in call[-1]
                 for call in self.gh_calls()
             )
+        )
+
+    def test_an_escalation_reason_keeps_its_own_parentheses(self):
+        result = self.run_sweep("17", "--comment")
+
+        reason = "upstream distfile for 13.0 is missing (404/403), not a slow mirror"
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"#17  escalated: {reason}", result.stdout)
+        self.assertTrue(
+            any(call[:3] == ["issue", "comment", "17"] and f"**{reason}**" in call[-1] for call in self.gh_calls())
         )
 
     def test_escalation_comment_carries_every_evidence_file(self):

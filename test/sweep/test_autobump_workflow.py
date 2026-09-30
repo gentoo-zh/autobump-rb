@@ -141,6 +141,15 @@ class AutobumpWorkflowContractTest(unittest.TestCase):
         self.assertTrue(fnmatch(artifact, pattern), f"{pattern!r} does not match the artifact {artifact!r}")
         self.assertIn(f"{into}/", collected, "collect does not read the directory the deltas landed in")
 
+    def test_only_a_cancelled_nvchecker_run_holds_the_bumps_back(self):
+        # the queue is the open issues, so a failed issue or dispatch job in nvchecker must not stop it
+        workflow = yaml.safe_load(WORKFLOW.read_text())
+        triggers = workflow.get("on", workflow.get(True))
+        self.assertLessEqual({"workflow_run", "schedule", "workflow_dispatch"}, set(triggers))
+        gates = re.findall(r"workflow_run\.conclusion\s*(==|!=)\s*'([a-z_]+)'", WORKFLOW.read_text())
+        self.assertEqual(gates, [("!=", "cancelled")])
+        self.assertIn("workflow_run.conclusion", jobs()["wait"]["if"], "the gate is not on the job the others need")
+
 
 if __name__ == "__main__":
     unittest.main()
