@@ -245,6 +245,9 @@ class AutobumpSweepTest(unittest.TestCase):
             "PATH": f"{self.bin}:{os.environ['PATH']}",
         }
         environment.pop("AUTOBUMP_JUDGE", None)
+        # an attempt line carries the run it came from; inherited from an Actions job, one id
+        # would make every sweep here the same run, and its attempts would merge into one
+        environment.pop("GITHUB_RUN_ID", None)
         if judge:
             environment["AUTOBUMP_JUDGE"] = judge
         return subprocess.run(
@@ -285,15 +288,14 @@ class AutobumpSweepTest(unittest.TestCase):
     def test_one_broken_issue_does_not_stop_the_sweep(self):
         # the shell this replaced ran without `set -e`; losing that would cost every
         # remaining package its turn and the run its only record.
-        self.done.chmod(0o444)
-        try:
-            run = self.run_sweep("3", "4")
-        finally:
-            self.done.chmod(0o644)
+        # #5 fails on an attempts ledger that is a directory, for any user; a read-only
+        # file does not stop root, who writes through mode bits
+        (self.state_home / "autobump" / "attempts").mkdir()
+        run = self.run_sweep("5", "3")
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertIn("==== sweep summary ====", run.stdout)
-        self.assertIn("#3  error (", run.stdout)
-        self.assertIn("#4  ", run.stdout)
+        self.assertIn("#5  error (", run.stdout)
+        self.assertIn("#3  bumped", run.stdout)
 
     def test_not_opted_in(self):
         result = self.run_sweep("1")
