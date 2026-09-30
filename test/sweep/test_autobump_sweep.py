@@ -229,7 +229,7 @@ class AutobumpSweepTest(unittest.TestCase):
         self.gh_log = Path(self.tempdir.name) / "gh.log"
         self.gh_state = Path(self.tempdir.name) / "gh.state"
 
-    def run_sweep(self, *args, judge="", environment_extra=None):
+    def run_sweep(self, *args, judge="", environment_extra=None, run_environment=None):
         environment = os.environ | (environment_extra or {}) | {
             "AUTOBUMP_ENGINE": str(self.bin / "engine"),
             "AUTOBUMP_REPO": str(self.repo),
@@ -248,6 +248,8 @@ class AutobumpSweepTest(unittest.TestCase):
         # an attempt line carries the run it came from; inherited from an Actions job, one id
         # would make every sweep here the same run, and its attempts would merge into one
         environment.pop("GITHUB_RUN_ID", None)
+        environment.pop("GITHUB_RUN_ATTEMPT", None)
+        environment.update(run_environment or {})
         if judge:
             environment["AUTOBUMP_JUDGE"] = judge
         return subprocess.run(
@@ -503,6 +505,25 @@ class AutobumpSweepTest(unittest.TestCase):
         self.assertIn("try 2", summaries[1])
         self.assertIn("#5  deferred after 3 transient attempts", summaries[2])
         self.assertIn("cat/transient 4.0 deferred-transient", self.done.read_text())
+
+    def test_a_rerun_of_the_same_run_advances_the_attempts_cap(self):
+        summaries = []
+        for attempt in ("1", "2"):
+            delta = Path(self.tempdir.name) / f"delta-{attempt}.json"
+            items = [{"issue": "5", "package": "cat/transient", "version": "4.0", "args": [],
+                      "footer": "", "attempt": 1, "attempts": len(self.attempt_lines())}]
+            run = {"GITHUB_RUN_ID": "777", "GITHUB_RUN_ATTEMPT": attempt}
+            worker = self.run_sweep("--worker", json.dumps({"items": items}), "--delta", str(delta),
+                                    run_environment=run)
+            self.assertEqual(worker.returncode, 0, worker.stderr)
+            plan = {"matrix": {"include": []}, "issues": ["5"], "results": {}}
+            collected = self.run_sweep("--collect", json.dumps(plan), str(delta), run_environment=run)
+            self.assertEqual(collected.returncode, 0, collected.stderr)
+            summaries.append(collected.stdout)
+
+        self.assertEqual(len(self.attempt_lines()), 2)
+        self.assertIn("try 1", summaries[0])
+        self.assertIn("try 2", summaries[1])
 
     def run_sweep_with_judge(self, *args, verdict='{"verdict":"proceed","reasons":[],"use_flags_needed":[],"deps_changed":[],"issue_comment":"ok"}'):
         self.write_executable(self.repo / "scripts" / "autobump-judge.sh", f'#!/bin/sh\nprintf \'%s\' \'{verdict}\'\n')
