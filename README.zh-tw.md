@@ -28,6 +28,7 @@ escalate,不依據推測進行修改。機械路徑中不含 LLM。
     ruby bin/autobump <issue#> --check                # 先解析一個 nvchecker bump issue
     ruby bin/autobump <cat/pkg> <newver> --pr         # 完整流程:build 測試、commit、建立 PR
     ruby bin/autobump <cat/pkg> <newver> --install    # 本地 build 測試:build+install+pkgcheck、本地 commit、不 push/PR
+    python3 bin/bundles.py where <cat/pkg>            # vendor bundle 控制器,在 overlay checkout 中執行(或加 --overlay DIR)
 
     rake                                              # syntax + golden 決策測試(CI 執行的項目)
     bash test/decisions.sh                            # 單獨執行 golden 決策測試(hermetic fixtures)

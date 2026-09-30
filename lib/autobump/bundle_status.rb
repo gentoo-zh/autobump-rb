@@ -2,7 +2,7 @@
 require 'json'
 require 'time'
 module Autobump
-  # The bundle controller's snapshot (overlay scripts/bundles.py, schema 1), read with
+  # The bundle controller's snapshot (bin/bundles.py, schema 1), read with
   # --bundle-status. It says which release of which drafts / gentoo-deps repo carries this
   # bump's vendor bundles and how far their producers got. The engine never asks GitHub:
   # the snapshot is the only evidence, and a 404 on a URI it covers is judged from it.

@@ -69,9 +69,9 @@ test.
 
 ## Bundle snapshot (`--bundle-status FILE`)
 
-The overlay's bundle controller (`scripts/bundles.py`) writes `bundles.json` (schema 1): for each
-(package, version), the drafts / gentoo-deps releases that carry its vendor bundles, each with a
-state and its producer runs. The engine reads it and asks GitHub nothing. A missing, unparsable or
+The bundle controller (`bin/bundles.py`, run from an overlay checkout) writes `bundles.json`
+(schema 1): for each (package, version), the drafts / gentoo-deps releases that carry its vendor
+bundles, each with a state and its producer runs. The engine reads it and asks GitHub nothing. A missing, unparsable or
 mismatched snapshot, or one without this target, stops the run (`exit 2`); it never falls back.
 
 A fetch URI is covered when it is `https://github.com/<repo>/releases/download/<release_tag>/<file>`

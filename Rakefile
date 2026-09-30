@@ -1,9 +1,9 @@
 # frozen_string_literal: true
-task default: %i[syntax sweep decisions pr_body heavy_dep cli_flags payload_diff rewrite gui_probe build_dispatch fetch_failure sh_timeout distfiles_outcome bundle_status deps_artifact_url dynamic_source_pin preflight_guards version_compare url_recheck remote_pick gates]
+task default: %i[syntax sweep decisions pr_body heavy_dep cli_flags payload_diff rewrite gui_probe build_dispatch fetch_failure sh_timeout distfiles_outcome bundle_status bundle_controller deps_artifact_url dynamic_source_pin preflight_guards version_compare url_recheck remote_pick gates]
 
 desc 'ruby -c on all sources'
 task :syntax do
-  Dir['lib/**/*.rb', 'bin/*'].each { |f| sh "ruby -c #{f}" }
+  Dir['lib/**/*.rb', 'bin/*'].grep_v(/\.py\z/).each { |f| sh "ruby -c #{f}" }
 end
 
 desc 'golden decision test (hermetic, uses test/fixtures)'
@@ -75,6 +75,11 @@ end
 desc 'what --bundle-status makes of a bundle 404 (hermetic)'
 task :bundle_status do
   sh 'ruby test/bundle_status.rb'
+end
+
+desc 'the vendor bundle controller against a scripted GitHub API (hermetic)'
+task :bundle_controller do
+  sh 'python3 test/bundle_controller.py'
 end
 
 desc 'the guards preflight applies after syncing master (hermetic)'

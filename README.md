@@ -15,9 +15,9 @@ It only does bumps it can prove safe. Anything needing judgement — a new depen
 jump, a stale source pin, a changed build surface — escalates instead of being patched from a guess.
 No LLM in the mechanical path.
 
-`--bundle-status bundles.json` reads the overlay bundle controller's snapshot: a 404 on a vendor
-bundle release it covers defers while the bundle's producer is still running or finished under 15
-minutes ago, and escalates naming the asset and the producer run after that. See
+`--bundle-status bundles.json` reads the snapshot of the bundle controller, `bin/bundles.py`: a 404
+on a vendor bundle release it covers defers while the bundle's producer is still running or finished
+under 15 minutes ago, and escalates naming the asset and the producer run after that. See
 [`DESIGN.md`](DESIGN.md).
 
 ## Exit-code contract
@@ -36,6 +36,7 @@ Everything downstream (the sweep driver, CI, a judge) keys off three exit codes:
     ruby bin/autobump <issue#> --check                # resolve an nvchecker bump issue first
     ruby bin/autobump <cat/pkg> <newver> --pr         # full pipeline: build-test, commit, open PR
     ruby bin/autobump <cat/pkg> <newver> --install    # local build-test: build+install+pkgcheck, local commit, no push/PR
+    python3 bin/bundles.py where <cat/pkg>            # vendor bundle controller, run from an overlay checkout (or --overlay DIR)
 
     rake                                              # the whole suite (what CI runs)
     AUTOBUMP_OVERLAY=/path/to/overlay rake sweep      # and the overlay driver's tests, which need it
