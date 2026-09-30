@@ -52,10 +52,15 @@ Each is a way a plain copy-and-refetch would ship something wrong, so it escalat
   older source, so nothing downstream catches it.
 - **source_pin** — ebuild pins a `_COMMIT`/`_TAG` with no per-version vendor bundle; a version-only
   copy keeps the stale pin while distfiles + emerge succeed against the old source.
-- **deps_artifact** — the new version's `-vendor`/`-crates`/`-deps`/`node_modules` bundle URL 404s.
 - **applied_patches** — the ebuild applies `files/*.patch`; re-application needs a human.
 - **hackport_cabal** — a `haskell-cabal` ebuild: dep bounds / ghc floors / hackage revision come from
   the upstream `.cabal`, not the ebuild, so a version-only copy keeps stale bounds.
+
+One signal defers (`exit 2`) instead of escalating:
+
+- **deps_artifact** — the new version's `-vendor`/`-crates`/`-deps`/`node_modules` bundle URL 404s.
+  A bundle that is not published yet is temporal, so it retries; alongside any escalation above it is
+  only evidence.
 
 A pin that is only *recorded* (a byte-identical `GIT_CRATES`/`_VER=` line) does not escalate — a stale
 one surfaces downstream as a 404 or build failure. Every signal is pinned by a fixture in the golden
