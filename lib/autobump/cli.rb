@@ -30,13 +30,18 @@ module Autobump
         die e.message
       end
       Log.log "current: #{loc.old_pvr}  ->  target: #{newver}"
+      bundles = begin
+        o[:bundle_status] && BundleStatus.load(o[:bundle_status], package: pkg, version: newver)
+      rescue Abort => e
+        die e.message
+      end
       ev = Evidence.new(pn)
       ctx = Context.new(
         cfg: cfg, pkg: pkg, cat: cat, pn: pn, pkgdir: pkgdir, newver: newver, issue: issue,
         check: o[:check], install: o[:install], pr: o[:pr], diff_only: o[:diff_only],
         accept_surface: o[:accept_surface], accept_payload: o[:accept_payload], keep_old: o[:keep_old],
         rewrite_var: o[:rewrite_var], rewrite_url: o[:rewrite_url],
-        rewrite_regex: o[:rewrite_regex],
+        rewrite_regex: o[:rewrite_regex], bundles: bundles,
         old_ebuild: loc.old_ebuild, old_pvr: loc.old_pvr, old_pv: loc.old_pv,
         old_pvr_presync: loc.old_pvr, new_ebuild: loc.new_ebuild,
         branch: "#{cat}-#{pn}-#{newver}", evidence: ev, armed: false)
@@ -45,7 +50,7 @@ module Autobump
       res = begin
         Classify.new(cfg: cfg, pkg: pkg, old_ebuild: loc.old_ebuild,
                      old_pv: loc.old_pv, newver: newver, evidence: ev,
-                     rewrite_var: o[:rewrite_var]).run
+                     rewrite_var: o[:rewrite_var], bundles: bundles).run
       rescue Abort => e
         die e.message
       rescue => e # an unexpected classify error defers (exit 2), never exit 1 off the contract
@@ -97,7 +102,7 @@ module Autobump
     def self.parse(argv)
       o = { check: false, install: false, pr: false, diff_only: false,
             accept_surface: false, accept_payload: false, keep_old: false,
-            rewrite_var: nil, rewrite_url: nil, rewrite_regex: nil,
+            rewrite_var: nil, rewrite_url: nil, rewrite_regex: nil, bundle_status: nil,
             pkg: nil, newver: nil, issue: nil }
       args = argv.dup
       until args.empty?
@@ -114,6 +119,7 @@ module Autobump
         when '--rewrite-var' then o[:rewrite_var] = option_value(args, a)
         when '--rewrite-url' then o[:rewrite_url] = option_value(args, a)
         when '--rewrite-regex' then o[:rewrite_regex] = option_value(args, a)
+        when '--bundle-status' then o[:bundle_status] = option_value(args, a)
         when %r{/}
           die("two packages given: #{o[:pkg]} and #{a}") if o[:pkg]
           o[:pkg] = a                                                # bash */*

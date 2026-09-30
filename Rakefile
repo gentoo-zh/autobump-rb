@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-task default: %i[syntax sweep decisions pr_body heavy_dep cli_flags payload_diff rewrite gui_probe build_dispatch fetch_failure sh_timeout distfiles_outcome deps_artifact_url dynamic_source_pin preflight_guards version_compare url_recheck remote_pick gates]
+task default: %i[syntax sweep decisions pr_body heavy_dep cli_flags payload_diff rewrite gui_probe build_dispatch fetch_failure sh_timeout distfiles_outcome bundle_status deps_artifact_url dynamic_source_pin preflight_guards version_compare url_recheck remote_pick gates]
 
 desc 'ruby -c on all sources'
 task :syntax do
@@ -70,6 +70,11 @@ end
 desc 'what a failed fetch/manifest turns into (hermetic)'
 task :distfiles_outcome do
   sh 'ruby test/distfiles_outcome.rb'
+end
+
+desc 'what --bundle-status makes of a bundle 404 (hermetic)'
+task :bundle_status do
+  sh 'ruby test/bundle_status.rb'
 end
 
 desc 'the guards preflight applies after syncing master (hermetic)'

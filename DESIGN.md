@@ -60,11 +60,34 @@ One signal defers (`exit 2`) instead of escalating:
 
 - **deps_artifact** — the new version's `-vendor`/`-crates`/`-deps`/`node_modules` bundle URL 404s.
   A bundle that is not published yet is temporal, so it retries; alongside any escalation above it is
-  only evidence.
+  only evidence. With `--bundle-status`, a URL on a snapshot bundle's release skips this probe and is
+  judged by the fetch stage (below).
 
 A pin that is only *recorded* (a byte-identical `GIT_CRATES`/`_VER=` line) does not escalate — a stale
 one surfaces downstream as a 404 or build failure. Every signal is pinned by a fixture in the golden
 test.
+
+## Bundle snapshot (`--bundle-status FILE`)
+
+The overlay's bundle controller (`scripts/bundles.py`) writes `bundles.json` (schema 1): for each
+(package, version), the drafts / gentoo-deps releases that carry its vendor bundles, each with a
+state and its producer runs. The engine reads it and asks GitHub nothing. A missing, unparsable or
+mismatched snapshot, or one without this target, stops the run (`exit 2`); it never falls back.
+
+A fetch URI is covered when it is `https://github.com/<repo>/releases/download/<release_tag>/<file>`
+of one of the target's bundles, matched exactly. When every URI that answered 404 is covered:
+
+| bundle | exit |
+|---|---|
+| `pending` / `unknown`, or a producer still queued or running | 2 `bundle pending` |
+| every producer succeeded, the latest under 15 min ago | 2 `bundle pending` |
+| every producer succeeded 15 min ago or more | 3 `bundle asset missing: <uri> (<run>)` |
+| any producer failed, cancelled or missing, or none listed | 3 `... no successful producer` |
+
+A 404 on any URI the snapshot does not cover escalates as before; a mirror 404, a timeout and a
+local failure are judged as before. A bundle decision prints `result: <json>` and writes
+`result.json` into the evidence pack, carrying `"bundle": true`, so the sweep counts it under its
+bundle policy instead of as a transient defer.
 
 ## Testing
 

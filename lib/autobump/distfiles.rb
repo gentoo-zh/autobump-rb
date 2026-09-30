@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 require 'fileutils'
+require 'json'
 require 'timeout'
 require 'uri'
 require 'open-uri'
@@ -27,6 +28,7 @@ module Autobump
     REWRITE_MAX_BYTES = 8 * 1024 * 1024
 
     MISSING = /ERROR 40[34]:|\b40[34]\b[^\n]*\b(Not Found|Forbidden|File not found)\b/i
+    FORBIDDEN = /ERROR 403:|\b403\b[^\n]*\b(Not Found|Forbidden|File not found)\b/i
 
     # portage's fetch log, split into the ">>> Downloading '<uri>'" blocks it writes per URI.
     # Anything before the first block belongs to no URI.
@@ -46,14 +48,23 @@ module Autobump
     # GENTOO_MIRRORS first and a fresh distfile is never on them, so their routine 404 would
     # otherwise turn every transient upstream failure into a permanent escalation.
     def self.upstream_missing?(out, mirrors)
+      return out.match?(MISSING) if download_blocks(out).empty? # no per-URI structure to judge by
+      !missing_uris(out, mirrors).empty?
+    end
+
+    # The ebuild's URIs that answered 404/403, mirrors excluded.
+    def self.missing_uris(out, mirrors) = missing_statuses(out, mirrors).keys
+
+    # The same URIs, each with the status it answered: 403 when any attempt was refused.
+    def self.missing_statuses(out, mirrors)
       hosts = mirrors.to_s.split.filter_map { |m| URI.parse(m).host rescue nil }
       blocks = download_blocks(out)
-      return out.match?(MISSING) if blocks.empty? # no per-URI structure to judge by
       # a URI portage went back to and got the file from says nothing about the file missing
       fetched = blocks.select { |_uri, text| text.match?(/\bsaved \[|\bDownloaded:/) }.map(&:first)
-      blocks.any? do |uri, text|
+      blocks.each_with_object({}) do |(uri, text), statuses|
         host = (URI.parse(uri).host rescue nil)
-        !hosts.include?(host) && !fetched.include?(uri) && text.match?(MISSING)
+        next if hosts.include?(host) || fetched.include?(uri) || !text.match?(MISSING)
+        statuses[uri] = statuses[uri] == 403 || text.match?(FORBIDDEN) ? 403 : 404
       end
     end
 
@@ -95,7 +106,9 @@ module Autobump
           # Anything else (timeout, connection reset, 5xx) is worth another sweep.
           # Match wget's own line ("ERROR 404: Not Found." / "ERROR 404: File not found.") as well
           # as a bare status line, because the reason text differs per server.
-          if Distfiles.upstream_missing?(out, `portageq envvar GENTOO_MIRRORS 2>/dev/null`)
+          mirrors = `portageq envvar GENTOO_MIRRORS 2>/dev/null`
+          bundle_outcome(out, mirrors) if c.bundles
+          if Distfiles.upstream_missing?(out, mirrors)
             raise Escalate.new("upstream distfile for #{c.newver} is missing (404/403), not a slow mirror",
                                c.evidence.dir)
           end
@@ -113,6 +126,25 @@ module Autobump
     end
 
     private
+
+    # A 404 on a bundle release the snapshot covers is judged from the snapshot: a producer
+    # still running defers, a finished one escalates naming the asset. Any missing URI the
+    # snapshot does not cover is a source 404 and keeps the plain escalation, and so does a
+    # 403: an unpublished asset answers 404, so a refusal is not a bundle still building.
+    def bundle_outcome(out, mirrors)
+      c = @c
+      statuses = Distfiles.missing_statuses(out, mirrors)
+      return unless statuses.values.all?(404)
+      missing = statuses.keys
+      return unless c.bundles.covers_all?(missing)
+      d = c.bundles.judge(missing)
+      # a defer must not hide a failure no wait fixes
+      return if d.exit_code == 2 && Distfiles.local_failure(out)
+      c.evidence.write('result.json', "#{JSON.pretty_generate(d.result)}\n")
+      puts "result: #{JSON.generate(d.result)}"
+      raise Escalate.new(d.reason, c.evidence.dir) if d.exit_code == 3
+      raise Abort, d.reason
+    end
 
     # Fetch and apply the optional opaque token only after copying the selected ebuild.
     # The rewritten SRC_URI is therefore what Manifest fetches; a wrong token fails at

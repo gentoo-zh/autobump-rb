@@ -15,6 +15,11 @@ It only does bumps it can prove safe. Anything needing judgement — a new depen
 jump, a stale source pin, a changed build surface — escalates instead of being patched from a guess.
 No LLM in the mechanical path.
 
+`--bundle-status bundles.json` reads the overlay bundle controller's snapshot: a 404 on a vendor
+bundle release it covers defers while the bundle's producer is still running or finished under 15
+minutes ago, and escalates naming the asset and the producer run after that. See
+[`DESIGN.md`](DESIGN.md).
+
 ## Exit-code contract
 
 Everything downstream (the sweep driver, CI, a judge) keys off three exit codes:

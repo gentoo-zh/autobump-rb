@@ -9,10 +9,10 @@ module Autobump
   class Classify
     Result = Struct.new(:escalations, :multiarch, :gui, :keywords_line, keyword_init: true)
 
-    def initialize(cfg:, pkg:, old_ebuild:, old_pv:, newver:, evidence:, rewrite_var: nil)
+    def initialize(cfg:, pkg:, old_ebuild:, old_pv:, newver:, evidence:, rewrite_var: nil, bundles: nil)
       @cfg, @pkg, @old_ebuild = cfg, pkg, old_ebuild
       @cat, @pn = pkg.split('/', 2)
-      @old_pv, @newver, @ev, @rewrite_var = old_pv, newver, evidence, rewrite_var
+      @old_pv, @newver, @ev, @rewrite_var, @bundles = old_pv, newver, evidence, rewrite_var, bundles
       # tolerate non-UTF-8 bytes: scrub so a later regex/scan can't raise an uncaught
       # ArgumentError (invalid byte sequence) that would exit 1, off the 0/2/3 contract.
       @text = File.read(old_ebuild, encoding: 'UTF-8').scrub
@@ -153,6 +153,11 @@ module Autobump
       # (${MY_PN}, ${MY_PV}) would be curl'd literally and answer 404 for a bundle that exists
       if t.include?('${')
         Log.log("deps artifact check skipped (unresolved variable in #{t})")
+        return nil
+      end
+      # a snapshot bundle is judged on the real fetch, which knows whether its producer is done
+      if (b = @bundles&.covering(t))
+        Log.log("deps artifact check skipped (bundle #{b.repo}@#{b.release_tag}; the fetch judges it): #{t}")
         return nil
       end
       code = `curl -sIL --max-time 30 -o /dev/null -w '%{http_code}' #{t.shellescape} 2>/dev/null`.strip
