@@ -232,7 +232,7 @@ module Autobump
       c.smoke = 'installed; no version output matched NEWVER (verify manually)'
       bins(c.pkg).each do |bin|
         %w[--version version -V].each do |vf|
-          out = `timeout 20 #{bin.shellescape} #{vf} 2>&1 | head -3`
+          out = c.sh(bin, vf, timeout: 20).first.lines.first(3).join
           next unless out.include?(c.newver)
           line = out.lines.find { |l| l.include?(c.newver) }.to_s.strip
           c.smoke = "#{vf} ok: #{File.basename(bin)}: #{line}"
@@ -260,10 +260,10 @@ module Autobump
       details = []
       bins(c.pkg).each do |bin|
         fallback_ran = false
-        perr = `DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1 timeout 15 #{bin.shellescape} </dev/null 2>&1 >/dev/null`.scrub; prc = $?.exitstatus
+        perr, prc = gui_launch(bin)
         if perr.include?('no-sandbox')
           fallback_ran = true
-          perr = `DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1 timeout 15 #{bin.shellescape} --no-sandbox --disable-gpu </dev/null 2>&1 >/dev/null`.scrub; prc = $?.exitstatus
+          perr, prc = gui_launch(bin, '--no-sandbox', '--disable-gpu')
         end
         outcome, launch_failed = self.class.gui_launch_outcome(bin, prc, perr, fallback_ran)
         details << <<~OUT
@@ -287,6 +287,13 @@ module Autobump
       # multi-binary package cannot bury the sweep's own output
       details.each { |d| Log.log "GUI launch probe: #{d.lines[0].to_s.chomp} -> #{d.lines[3].to_s.chomp}" }
       c.smoke = "#{c.smoke} | GUI launch probe: #{res}"
+    end
+
+    # stderr only, stdout dropped; returns [stderr, exit status]
+    def gui_launch(bin, *flags)
+      perr, _, prc = @c.sh('env', 'DISPLAY=:99', 'LIBGL_ALWAYS_SOFTWARE=1', bin, *flags,
+                           timeout: 15, stderr_only: true, in: File::NULL)
+      [perr.scrub, prc]
     end
 
     # linked-libs vs RDEPEND (source only). '>' undeclared-but-linked = missing dep

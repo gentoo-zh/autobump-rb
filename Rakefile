@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-task default: %i[syntax sweep decisions pr_body heavy_dep cli_flags payload_diff rewrite gui_probe build_dispatch fetch_failure sh_timeout distfiles_outcome bundle_status bundle_controller deps_artifact_url dynamic_source_pin preflight_guards version_compare url_recheck remote_pick gates]
+task default: %i[syntax sweep decisions pr_body heavy_dep cli_flags payload_diff rewrite gui_probe probe_hang build_dispatch fetch_failure sh_timeout distfiles_outcome bundle_status bundle_controller deps_artifact_url dynamic_source_pin preflight_guards version_compare url_recheck remote_pick gates]
 
 desc 'ruby -c on all sources'
 task :syntax do
@@ -39,6 +39,11 @@ end
 desc 'GUI launch outcome classification (hermetic)'
 task :gui_probe do
   sh 'ruby test/gui_probe.rb'
+end
+
+desc 'version smoke and GUI probe against an app that escapes the process group (hermetic)'
+task :probe_hang do
+  sh 'ruby test/probe_hang.rb'
 end
 
 desc 'build-test payload/install dispatch (hermetic)'

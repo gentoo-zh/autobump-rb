@@ -42,6 +42,36 @@ Dir.mktmpdir('autobump-sh-') do |dir|
   check 'the background child died with the group', File.mtime(marker), before
 end
 
+out, = ctx.sh('bash', '-c', 'echo to stdout; echo to stderr >&2', stderr_only: true)
+check 'stderr_only drops stdout', out.strip, 'to stderr'
+
+# A wrapper that starts its app under setsid, as /usr/bin/reasonix-desktop starts Electron: the
+# app leaves the process group, so only the output it still holds ties it to the command.
+Dir.mktmpdir('autobump-sh-') do |dir|
+  pidfile = File.join(dir, 'pid')
+  escape = "setsid -f sh -c 'echo $$ > #{pidfile}; exec sleep 30'; " \
+           "while [ ! -s #{pidfile} ]; do sleep 0.05; done; "
+  gone = lambda do
+    Process.kill(0, File.read(pidfile).to_i)
+    false
+  rescue Errno::ESRCH
+    true
+  end
+
+  t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  _, ok, code = ctx.sh('bash', '-c', "#{escape} sleep 30", timeout: 1, stderr_only: true)
+  check 'a timeout ends even when an escaped child holds the output', [ok, code], [false, 124]
+  check 'and within the deadline', Process.clock_gettime(Process::CLOCK_MONOTONIC) - t < 5, true
+  check 'the escaped child is gone', gone.call, true
+
+  File.delete(pidfile)
+  t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  out, ok, = ctx.sh('bash', '-c', "#{escape} echo done")
+  check 'a wrapper that exits returns at once', [out.strip, ok], ['done', true]
+  check 'without waiting on the escaped child', Process.clock_gettime(Process::CLOCK_MONOTONIC) - t < 5, true
+  check 'which is gone too', gone.call, true
+end
+
 puts '----'
 puts $fail.zero? ? 'sh_timeout: all passed' : "sh_timeout: #{$fail} failed"
 exit($fail.zero? ? 0 : 1)
