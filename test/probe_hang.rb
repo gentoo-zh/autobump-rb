@@ -4,6 +4,7 @@
 # setsid, as /usr/bin/reasonix-desktop starts Electron. The app keeps the probe's output open
 # from outside the process group; reading that output to EOF hung the job for hours.
 # Hermetic: the binaries are shell scripts and Xvfb is not started. Run: ruby test/probe_hang.rb
+require 'fileutils'
 require 'tmpdir'
 require_relative '../lib/autobump'
 
@@ -18,12 +19,13 @@ def check(name, got, want)
 end
 
 class Probe < Autobump::BuildTest
-  def initialize(ctx, bins)
+  def initialize(ctx, files)
     super(ctx)
-    @bins = bins
+    @files = files
   end
 
-  def bins(_pkg) = @bins
+  def owned_files(_pkg) = @files
+  def bins(_pkg) = @files.grep_v(/\.desktop\z/)
   def spawn(*) = Process.spawn('true') # no Xvfb; the launches never reach a display
 end
 
@@ -65,6 +67,9 @@ Dir.mktmpdir('autobump-probe-') do |dir|
     esac
   SH
   File.chmod(0o755, launcher, fast)
+  desktop = File.join(dir, 'share/applications/launcher.desktop')
+  FileUtils.mkdir_p(File.dirname(desktop))
+  File.write(desktop, "[Desktop Entry]\nType=Application\nExec=#{launcher} %U\n")
 
   ctx = lambda do
     Autobump::Context.new(cfg: Struct.new(:sudo).new(''), pkg: 'app-misc/fixture', newver: '1.2.3',
@@ -85,7 +90,7 @@ Dir.mktmpdir('autobump-probe-') do |dir|
   File.delete(pidfile)
   c = ctx.call
   t = now
-  Probe.new(c, [launcher]).send(:gui_probe)
+  Probe.new(c, [launcher, desktop]).send(:gui_probe)
   check 'the GUI probe does not wait on the escaped app', now - t < 10, true
   check 'and classifies the launch as before',
         c.smoke, ' | GUI launch probe: launcher exited immediately (status 0) before the 15s timeout ' \

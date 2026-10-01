@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+require 'set'
 require 'shellwords'
 module Autobump
   # Stage 6: build test.
@@ -28,6 +29,8 @@ module Autobump
     GUI_MISSING_LIBRARY = /error while loading shared librar|symbol lookup error|undefined symbol|GLIBC_[0-9.]+.? not found/i
     GUI_CRASH_STATUSES = [132, 134, 135, 136, 139].freeze
     GUI_STOP_STATUSES = (GUI_CRASH_STATUSES + [124]).freeze
+    ON_PATH = %r{\A/(?:usr/|opt/)?s?bin/[^/]+\z}
+    DESKTOP_ENTRY = %r{/share/applications/[^/]+\.desktop\z}
 
     # Which saved elog belongs to THIS bump. A dependency the emerge pulled in writes its own
     # elog (net-libs/nodejs' postinst notice), and a sibling sharing the pn prefix in the same
@@ -117,6 +120,33 @@ module Autobump
           .reject  { |l| l.include?("#{pn}-#{newver}") }
           .flat_map { |l| HEAVY.select { |h| l.include?(h) } }
           .uniq
+    end
+
+    # What a user starts: the package's files on PATH, and the package's own files that its
+    # .desktop entries run. A payload under /opt also ships node_modules/.bin, resources/ and
+    # helper scripts; launching those runs installers and build scripts, not the app.
+    def self.launchers(files)
+      owned = files.to_set
+      execs = files.grep(DESKTOP_ENTRY).filter_map { |entry| desktop_exec(File.read(entry)) rescue nil }
+      paths = execs.map do |cmd|
+        next cmd if cmd.start_with?('/')
+
+        ENV.fetch('PATH', '').split(':').map { |dir| File.join(dir, cmd) }.find { |f| owned.include?(f) }
+      end
+      (files.grep(ON_PATH) + paths.select { |f| owned.include?(f) }).uniq
+    end
+
+    # the program an entry's Exec= runs, past an `env VAR=value` prefix
+    def self.desktop_exec(text)
+      entry = text[/^\[Desktop Entry\][^\n]*\n(.*?)(?=^\[|\z)/m, 1] or return
+      line = entry[/^Exec\s*=\s*(.+)$/, 1] or return
+      words = begin
+        line.shellsplit
+      rescue ArgumentError
+        line.split
+      end
+      words = words.drop(1).drop_while { |w| w.include?('=') } if words.first == 'env'
+      words.first
     end
 
     # Pure classification of one GUI launch. The probe itself remains advisory; callers use
@@ -243,9 +273,9 @@ module Autobump
       Log.ok "emerge + smoke: #{c.smoke}"
     end
 
-    def bins(pkg)
-      `qlist #{pkg.shellescape} 2>/dev/null`.lines.map(&:chomp).select { |l| l =~ %r{/s?bin/[^/]+$} }
-    end
+    def owned_files(pkg) = `qlist #{pkg.shellescape} 2>/dev/null`.lines.map(&:chomp)
+    def bins(pkg) = owned_files(pkg).select { |l| l =~ %r{/s?bin/[^/]+$} }
+    def gui_timeout = 15
 
     # ADVISORY headless GUI launch probe (never escalates): a GUI app can install
     # clean yet crash on start, so a launch under Xvfb catches a broken bump early.
@@ -258,7 +288,7 @@ module Autobump
       res = 'no GUI binaries found'
       failed = false
       details = []
-      bins(c.pkg).each do |bin|
+      self.class.launchers(owned_files(c.pkg)).each do |bin|
         fallback_ran = false
         perr, prc = gui_launch(bin)
         if perr.include?('no-sandbox')
@@ -292,7 +322,7 @@ module Autobump
     # stderr only, stdout dropped; returns [stderr, exit status]
     def gui_launch(bin, *flags)
       perr, _, prc = @c.sh('env', 'DISPLAY=:99', 'LIBGL_ALWAYS_SOFTWARE=1', bin, *flags,
-                           timeout: 15, stderr_only: true, in: File::NULL)
+                           timeout: gui_timeout, stderr_only: true, in: File::NULL)
       [perr.scrub, prc]
     end
 
