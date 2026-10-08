@@ -150,7 +150,9 @@ class AutobumpWorkflowContractTest(unittest.TestCase):
         self.assertLessEqual({"workflow_run", "schedule", "workflow_dispatch"}, set(triggers))
         gates = re.findall(r"workflow_run\.conclusion\s*(==|!=)\s*'([a-z_]+)'", WORKFLOW.read_text())
         self.assertEqual(gates, [("!=", "cancelled")])
-        self.assertIn("workflow_run.conclusion", jobs()["wait"]["if"], "the gate is not on the job the others need")
+        roots = [job for job in jobs().values() if "needs" not in job]
+        self.assertEqual(len(roots), 1)
+        self.assertIn("workflow_run.conclusion", roots[0]["if"], "the gate is not on the job the others need")
 
 
 if __name__ == "__main__":

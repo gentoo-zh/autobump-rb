@@ -94,7 +94,8 @@ class AutobumpBundleWiringTest(unittest.TestCase):
         delta = flag_value(self.plan_tokens, "--bundles-delta")
         upload = next(s for s in steps(self.jobs["plan"])
                       if uses(s, "actions/upload-artifact") and s["with"]["path"] == delta)
-        self.assertNotIn("if", upload)
+        # the waiter reads the delta of a plan that failed after the controller ran
+        self.assertEqual(upload.get("if", "always()"), "always()")
         download = next(s for s in steps(self.jobs["collect"]) if uses(s, "actions/download-artifact"))
         self.assertTrue(fnmatch(upload["with"]["name"], download["with"]["pattern"]))
         # a condition on the bump job here would drop the plan's lines whenever it is skipped
