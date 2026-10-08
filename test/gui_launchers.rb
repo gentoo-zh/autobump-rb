@@ -79,7 +79,9 @@ Dir.mktmpdir('autobump-launchers-') do |dir|
   check 'is one too', last.gui_failures, [[app, 'app failed to launch headless (exit status 1)']]
   check 'an app that misses a library',
         probe.call("echo 'app: error while loading shared libraries: libnspr4.so: cannot open' >&2; exit 127"),
-        'app MISSING A LIBRARY at runtime - likely broken'
+        'app MISSING A LIBRARY at runtime (libnspr4.so) - likely broken'
+  check 'names the library in the PR', last.gui_failures,
+        [[app, 'app MISSING A LIBRARY at runtime (libnspr4.so) - likely broken']]
 
   check 'the node_modules script never ran', File.exist?(ran), false
 

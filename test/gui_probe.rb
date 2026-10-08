@@ -31,7 +31,16 @@ check 'exit 0 is an immediate exit, not a success',
       ['short-lived exited immediately (status 0) before the 15s timeout', false]
 check 'missing library wins over exit status and records fallback',
       F.call('/usr/bin/needs-lib', 1, 'error while loading shared libraries: libfoo.so: cannot open', true),
-      ['needs-lib MISSING A LIBRARY at runtime - likely broken (after --no-sandbox fallback)', true]
+      ['needs-lib MISSING A LIBRARY at runtime (libfoo.so) - likely broken (after --no-sandbox fallback)', true]
+check 'every missing library is named once',
+      F.call('/opt/app/App', 127,
+             "App: error while loading shared libraries: libfoo.so.1: cannot open shared object file\n" \
+             "App: error while loading shared libraries: libbar.so.2: cannot open shared object file\n" \
+             "App: error while loading shared libraries: libfoo.so.1: cannot open shared object file\n", false),
+      ['App MISSING A LIBRARY at runtime (libfoo.so.1, libbar.so.2) - likely broken', true]
+check 'a loader error without a library name keeps the plain text',
+      F.call('/usr/bin/needs-sym', 127, 'needs-sym: symbol lookup error: /usr/bin/needs-sym: undefined symbol: foo', false),
+      ['needs-sym MISSING A LIBRARY at runtime - likely broken', true]
 check 'signal exit retains its signal number',
       F.call('/usr/bin/segfaults', 139, '', false),
       ['segfaults crashed on start (signal 11) - verify (could be headless GL)', true]
