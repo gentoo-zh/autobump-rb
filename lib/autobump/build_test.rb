@@ -27,6 +27,7 @@ module Autobump
       app-office/libreoffice media-gfx/blender dev-db/mongodb dev-db/mariadb dev-db/mysql
     ].freeze
     GUI_MISSING_LIBRARY = /error while loading shared librar|symbol lookup error|undefined symbol|GLIBC_[0-9.]+.? not found/i
+    GUI_MISSING_LIBRARY_NAME = /error while loading shared libraries: ([^:\s]+):/
     GUI_CRASH_STATUSES = [132, 134, 135, 136, 139].freeze
     GUI_STOP_STATUSES = (GUI_CRASH_STATUSES + [124]).freeze
     ON_PATH = %r{\A/(?:usr/|opt/)?s?bin/[^/]+\z}
@@ -155,7 +156,9 @@ module Autobump
       name = File.basename(bin)
       fallback = fallback_ran ? ' (after --no-sandbox fallback)' : ''
       if stderr =~ GUI_MISSING_LIBRARY
-        ["#{name} MISSING A LIBRARY at runtime - likely broken#{fallback}", true]
+        libs = stderr.scan(GUI_MISSING_LIBRARY_NAME).flatten.uniq
+        named = libs.empty? ? '' : " (#{libs.join(', ')})"
+        ["#{name} MISSING A LIBRARY at runtime#{named} - likely broken#{fallback}", true]
       elsif GUI_CRASH_STATUSES.include?(status)
         ["#{name} crashed on start (signal #{status - 128}) - verify (could be headless GL)#{fallback}", true]
       elsif status == 124
