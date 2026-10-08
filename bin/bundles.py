@@ -33,9 +33,13 @@ default).
 
 The snapshot (--out) is bundles.json schema 1, read by autobump-rb --bundle-status. The ledger
 (--ledger, --delta) holds one line per event, `<package> <version> <kind> <date> <run>`, with
-kind observe, dispatch, escalate or reset. A dispatch line is one request: its run carries the
-attempt (`<run>.<attempt>`) and it ends with the bundle id. A target with `retry` set in the
+kind observe, dispatch, escalate, reset or sync. A dispatch line is one request: its run carries
+the attempt (`<run>.<attempt>`) and it ends with the bundle id. A target with `retry` set in the
 targets JSON starts over from its reset line, and so does any target once it is ready.
+
+A plan target outside the index is not judged. Each gentoo-zh-drafts repo its ebuild downloads
+from, unless a bundle names it, gets its fork sync dispatched once per version: a `sync` line
+ending with the repo records the request.
 
 Tokens come from GH_TOKEN_<OWNER> (GH_TOKEN_GENTOO_ZH, GH_TOKEN_GENTOO_ZH_DRAFTS), locally
 from `gh auth token`; without one the reads go out anonymously and nothing is dispatched.
@@ -648,6 +652,72 @@ def run_targets(api, index, errors, targets, *, mode, ledger_lines=(), run="loca
     return results, delta, failures, warnings
 
 
+DRAFTS_URI = re.compile(r"https://github\.com/gentoo-zh-drafts/([^/\s\"']+)/releases/download/")
+SYNC_WORDS = ("sync", "mirror")
+
+
+def drafts_repos(package, version, root="."):
+    """The gentoo-zh-drafts repos the ebuilds of one version download from, in order."""
+    pn = package.split("/")[-1]
+    repos = []
+    for path in sorted(Path(root, package).glob(f"{pn}-{version}*.ebuild")):
+        if not re.fullmatch(rf"{re.escape(pn)}-{re.escape(version)}(?:-r\d+)?\.ebuild", path.name):
+            continue
+        names = [re.sub(r"\$\{PN\}|\$PN\b", pn, name) for name in DRAFTS_URI.findall(path.read_text())]
+        # a repo named through any other variable is not one this can resolve
+        repos += [f"gentoo-zh-drafts/{name}" for name in names if "$" not in name]
+    return list(dict.fromkeys(repos))
+
+
+def sync_workflows(listing):
+    workflows = listing.field("workflows", list) or []
+    return [w for w in workflows if isinstance(w, dict) and w.get("state") == "active"
+            and any(word in f"{w.get('name', '')} {w.get('path', '')}".lower() for word in SYNC_WORDS)]
+
+
+def kick_sync(api, repo):
+    """(dispatched, message, recorded): recorded once asking again next run would not help."""
+    listing = api.get("gentoo-zh-drafts", f"/repos/{repo}/actions/workflows?per_page=100")
+    if not listing.ok:
+        return False, f"{repo}: listing its workflows failed ({listing.describe()})", False
+    found = sync_workflows(listing)
+    if len(found) != 1:
+        names = ", ".join(w.get("path", "?") for w in found) or "none"
+        return False, f"{repo}: not one sync workflow ({names}), not dispatched", True
+    workflow = found[0]
+    response, sent = api.dispatch("gentoo-zh-drafts", repo, workflow["id"], {})
+    if response.ok:
+        return True, f"{repo}: dispatched {workflow.get('path')}", True
+    return False, f"{repo}: {workflow.get('path')} refused the dispatch ({response.describe()})", sent
+
+
+def kick_syncs(api, index, errors, targets, *, ledger_lines=(), run="local", root="."):
+    """Ask the fork sync of every drafts repo a target outside the index downloads from.
+
+    The sync mirrors the upstream tag, and the tag push starts the fork's packer. Each
+    (package, version, repo) is asked once: a failure is a warning, never a failed plan."""
+    producers = {b["repo"] for spec in index.values() for b in spec["bundles"]}
+    delta, kicks, warnings = [], [], []
+    seen = set()
+    for target in targets:
+        package, version = target["package"], target["version"]
+        if package in index or package in errors or (package, version) in seen:
+            continue
+        seen.add((package, version))
+        current = tree_version(package, root)
+        if not current:
+            continue
+        asked = {event[2] for event in history_of(ledger_lines, package, version) if event[0] == "sync"}
+        for repo in drafts_repos(package, current, root):
+            if repo in producers or repo in asked:
+                continue
+            dispatched, message, recorded = kick_sync(api, repo)
+            if recorded:
+                delta.append(ledger_line(package, version, "sync", run, repo))
+            (kicks if dispatched else warnings).append(f"{package} {version}: {message}")
+    return delta, kicks, warnings
+
+
 def snapshot(results, run):
     return {"schema": SCHEMA, "controller_run": run,
             "observed_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -810,7 +880,7 @@ def command_check(argv, index, errors, api, mode, overlay):
     return 1 if failures else 0
 
 
-def command_plan(argv, index, errors, api):
+def command_plan(argv, index, errors, api, overlay):
     paths = {flag: take(argv, flag) for flag in ("--targets", "--ledger", "--out", "--delta")}
     missing = [flag for flag, path in paths.items() if not path]
     if missing or argv:
@@ -822,12 +892,21 @@ def command_plan(argv, index, errors, api):
     results, delta, failures, warnings = run_targets(
         api, index, errors, targets, mode="plan", ledger_lines=lines, run=run,
         attempt=os.environ.get("GITHUB_RUN_ATTEMPT") or "1")
+    # its own client, so a refused sync cannot stop the bundle reads of the same owner
+    synced, kicks, kick_warnings = kick_syncs(GitHub(api.send, api.token), index, errors, targets,
+                                              ledger_lines=lines, run=run, root=overlay)
+    delta += synced
+    warnings += kick_warnings
     write_json(paths["--out"], snapshot(results, run))
     # the same shape as a sweep worker's delta, so collect merges it with theirs
     write_json(paths["--delta"], {"done": [], "attempts": [], "bundles": delta, "results": {},
                                   "status_comment_failed": []})
     print_results(results)
-    append_summary(f"## bundles\n\n{summary_table(results)}\n\n<details><summary>bundle index</summary>\n\n"
+    for kick in kicks:
+        print(f"sync: {kick}")
+    synced_lines = "".join(f"- sync: {kick}\n" for kick in kicks)
+    append_summary(f"## bundles\n\n{summary_table(results)}\n\n{synced_lines}"
+                   f"<details><summary>bundle index</summary>\n\n"
                    f"{index_markdown(index, errors)}\n</details>\n")
     report(failures, warnings)
     return 1 if failures else 0
@@ -851,7 +930,7 @@ def main(argv):
     if command in ("status", "prepare"):
         return command_check(rest, index, errors, api, command, overlay)
     if command == "plan":
-        return command_plan(rest, index, errors, api)
+        return command_plan(rest, index, errors, api, overlay)
     die(f"unknown command {command}")
 
 

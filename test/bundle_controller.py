@@ -564,6 +564,118 @@ class ControllerTest(Harness):
         self.assertEqual(result.stdout.splitlines()[0], "cat/ready 3.0")
 
 
+PLAIN_EBUILD = """\
+SRC_URI="
+	https://github.com/up/plain/archive/v${PV}.tar.gz -> ${P}.tar.gz
+	https://github.com/gentoo-zh-drafts/${PN}/releases/download/v${PV}/${P}-vendor.tar.xz -> ${P}-deps.tar.xz
+	https://github.com/gentoo-zh-drafts/${MY_PN}-web/releases/download/${PV}/web.tar.gz
+	https://github.com/gentoo-zh-drafts/drafts/releases/download/v${PV}/z.tar.gz
+	https://github.com/gentoo-zh-drafts/other/releases/download/${PV}/other.tar.gz
+"
+"""
+PLAIN_TARGET = {"issue": "4", "package": "cat/plain", "version": "1.1"}
+
+
+def workflow(number, name, path, state="active"):
+    return {"id": number, "name": name, "path": f".github/workflows/{path}", "state": state}
+
+
+def workflows(*items):
+    return (200, {}, {"workflows": list(items)})
+
+
+class SyncKickTest(Harness):
+    def setUp(self):
+        super().setUp()
+        package = self.repo / "cat" / "plain"
+        package.mkdir(parents=True)
+        (package / "plain-1.0.ebuild").write_text(PLAIN_EBUILD)
+        (package / "plain-0.9.ebuild").write_text(
+            'SRC_URI="https://github.com/gentoo-zh-drafts/old/releases/download/0.9/old.tar.gz"\n')
+        # the -r1 is the tree's 1.0 as well; 0.9 is not the tree's version
+        (package / "plain-1.0-r1.ebuild").write_text(
+            'SRC_URI="https://github.com/gentoo-zh-drafts/$PN-none/releases/download/1.0/n.tar.gz"\n')
+
+    def kick_routes(self, dispatch=ACCEPTED):
+        for name in ("plain", "other", "plain-none"):
+            self.route("GET", f"/repos/gentoo-zh-drafts/{name}", REPO)
+        self.route("GET", "/repos/gentoo-zh-drafts/plain/actions/workflows?per_page=100",
+                   workflows(workflow(11, "Sync upstream tags", "sync.yml"), workflow(12, "vendor", "vendor.yml"),
+                             workflow(13, "mirror (old)", "mirror.yml", state="disabled_manually")))
+        self.route("POST", "/repos/gentoo-zh-drafts/plain/actions/workflows/11/dispatches", dispatch)
+        self.route("GET", "/repos/gentoo-zh-drafts/other/actions/workflows?per_page=100",
+                   workflows(workflow(21, "sync", "a.yml"), workflow(22, "release", "mirror-tags.yml")))
+        self.route("GET", "/repos/gentoo-zh-drafts/plain-none/actions/workflows?per_page=100",
+                   workflows(workflow(31, "vendor", "vendor.yml")))
+
+    def listed(self):
+        return [c[1] for c in self.server.calls if c[0] == "GET" and c[1].endswith("/actions/workflows?per_page=100")]
+
+    def test_drafts_repos_of_the_tree_version(self):
+        # ${PN} and $PN are the package name; ${MY_PN}-web is not resolved, so it is skipped
+        self.assertEqual(bundles.drafts_repos("cat/plain", "1.0", self.repo),
+                         ["gentoo-zh-drafts/plain-none", "gentoo-zh-drafts/plain", "gentoo-zh-drafts/drafts",
+                          "gentoo-zh-drafts/other"])
+
+    def test_one_sync_workflow_is_dispatched_once_per_version(self):
+        self.kick_routes()
+        result, targets, _ = self.plan([PLAIN_TARGET])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # the drafts repo is cat/drafts' producer, which has a bundle entry of its own
+        self.assertNotIn("/repos/gentoo-zh-drafts/drafts/actions/workflows?per_page=100", self.listed())
+        self.assertEqual([(c[1], c[2], c[3]) for c in self.posts()],
+                         [("/repos/gentoo-zh-drafts/plain/actions/workflows/11/dispatches", "Bearer token-drafts",
+                           {"ref": "main", "inputs": {}})])
+        self.assertIn("sync: cat/plain 1.1: gentoo-zh-drafts/plain: dispatched .github/workflows/sync.yml",
+                      result.stdout)
+        self.assertIn("gentoo-zh-drafts/other: not one sync workflow", result.stderr)
+        self.assertIn("gentoo-zh-drafts/plain-none: not one sync workflow (none)", result.stderr)
+        self.assertEqual(targets, {})
+        self.assertEqual(sorted(line.split()[5] for line in self.ledger.read_text().splitlines()),
+                         ["gentoo-zh-drafts/other", "gentoo-zh-drafts/plain", "gentoo-zh-drafts/plain-none"])
+
+        self.server.calls.clear()
+        result, _, _ = self.plan([PLAIN_TARGET, PLAIN_TARGET | {"issue": "5"}])
+        self.assertEqual((self.posts(), self.listed()), ([], []))
+        # a new version is asked again
+        self.plan([PLAIN_TARGET | {"version": "1.2"}])
+        self.assertEqual(len(self.posts()), 1)
+
+    def test_a_refused_dispatch_is_a_warning_recorded_once(self):
+        self.route("GET", READY_TAG, RELEASED)
+        self.route("GET", DEPS_RUNS, runs())
+        ready = {"issue": "3", "package": "cat/ready", "version": "3.0"}
+        for status in (403, 422):
+            with self.subTest(status=status):
+                self.ledger.write_text("")
+                self.server.calls.clear()
+                self.kick_routes(dispatch=(status, {}, {"message": "no"}))
+                result, targets, _ = self.plan([PLAIN_TARGET, ready])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(targets["cat/ready"]["state"], "ready")
+                self.assertIn(f"refused the dispatch (HTTP {status}: no)", result.stderr)
+                self.assertIn("gentoo-zh-drafts/plain", self.ledger.read_text())
+                self.plan([PLAIN_TARGET, ready])
+                self.assertEqual(len(self.posts()), 1)
+
+    def test_a_failed_listing_is_asked_again_next_run(self):
+        self.kick_routes()
+        self.route("GET", "/repos/gentoo-zh-drafts/plain/actions/workflows?per_page=100",
+                   (502, {}, {"message": "bad gateway"}), workflows(workflow(11, "sync", "sync.yml")))
+        result, _, _ = self.plan([PLAIN_TARGET])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("gentoo-zh-drafts/plain", [line.split()[5] for line in self.ledger.read_text().splitlines()])
+        self.plan([PLAIN_TARGET])
+        self.assertEqual(len(self.posts()), 1)
+
+    def test_status_and_prepare_kick_nothing(self):
+        self.kick_routes()
+        for command in ("status", "prepare"):
+            result = self.controller(command, "cat/plain")
+            self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.posts(), [])
+
+
 class IndexTest(unittest.TestCase):
     def parse(self, text):
         return bundles.parse_package(__import__("tomllib").loads(text)["p"])
