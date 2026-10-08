@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-task default: %i[syntax sweep decisions pr_body pr_push heavy_dep cli_flags payload_diff rewrite gui_probe probe_hang gui_launchers build_dispatch fetch_failure sh_timeout distfiles_outcome bundle_status bundle_controller deps_artifact_url dynamic_source_pin preflight_guards version_compare url_recheck remote_pick gates]
+task default: %i[syntax sweep decisions pr_body pr_push heavy_dep cli_flags payload_diff rewrite gui_probe probe_hang gui_launchers build_dispatch fetch_failure sh_timeout distfiles_outcome bundle_status bundle_controller bundle_wait deps_artifact_url dynamic_source_pin preflight_guards version_compare url_recheck remote_pick gates]
 
 desc 'ruby -c on all sources'
 task :syntax do
@@ -95,6 +95,11 @@ end
 desc 'the vendor bundle controller against a scripted GitHub API (hermetic)'
 task :bundle_controller do
   sh 'python3 test/bundle_controller.py'
+end
+
+desc 'the bundle waiter against a scripted GitHub API and a fake clock (hermetic)'
+task :bundle_wait do
+  sh 'python3 test/bundle_wait.py'
 end
 
 desc 'the guards preflight applies after syncing master (hermetic)'
