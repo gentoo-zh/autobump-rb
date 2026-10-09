@@ -129,6 +129,9 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         self.reply("POST")
 
+    def do_PUT(self):
+        self.reply("PUT")
+
     def log_message(self, *args):
         pass
 
@@ -657,6 +660,30 @@ class SyncKickTest(Harness):
                 self.assertIn("gentoo-zh-drafts/plain", self.ledger.read_text())
                 self.plan([PLAIN_TARGET, ready])
                 self.assertEqual(len(self.posts()), 1)
+
+    def test_a_sync_off_for_inactivity_is_enabled_before_the_dispatch(self):
+        self.kick_routes()
+        self.route("GET", "/repos/gentoo-zh-drafts/plain/actions/workflows?per_page=100",
+                   workflows(workflow(11, "sync", "sync.yml", state="disabled_inactivity")))
+        self.route("PUT", "/repos/gentoo-zh-drafts/plain/actions/workflows/11/enable", ACCEPTED)
+        result, _, _ = self.plan([PLAIN_TARGET])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([(c[0], c[1]) for c in self.server.calls if c[0] != "GET"],
+                         [("PUT", "/repos/gentoo-zh-drafts/plain/actions/workflows/11/enable"),
+                          ("POST", "/repos/gentoo-zh-drafts/plain/actions/workflows/11/dispatches")])
+
+    def test_a_failed_enable_is_asked_again_next_run(self):
+        self.kick_routes()
+        self.route("GET", "/repos/gentoo-zh-drafts/plain/actions/workflows?per_page=100",
+                   workflows(workflow(11, "sync", "sync.yml", state="disabled_inactivity")))
+        self.route("PUT", "/repos/gentoo-zh-drafts/plain/actions/workflows/11/enable",
+                   (403, {}, {"message": "no"}), ACCEPTED)
+        result, _, _ = self.plan([PLAIN_TARGET])
+        self.assertIn("gentoo-zh-drafts/plain: enabling .github/workflows/sync.yml failed (HTTP 403: no)", result.stderr)
+        self.assertEqual(self.posts(), [])
+        self.assertNotIn("gentoo-zh-drafts/plain", [line.split()[5] for line in self.ledger.read_text().splitlines()])
+        self.plan([PLAIN_TARGET])
+        self.assertEqual(len(self.posts()), 1)
 
     def test_a_failed_listing_is_asked_again_next_run(self):
         self.kick_routes()

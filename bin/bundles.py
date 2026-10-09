@@ -671,7 +671,7 @@ def drafts_repos(package, version, root="."):
 
 def sync_workflows(listing):
     workflows = listing.field("workflows", list) or []
-    return [w for w in workflows if isinstance(w, dict) and w.get("state") == "active"
+    return [w for w in workflows if isinstance(w, dict) and w.get("state") in ("active", "disabled_inactivity")
             and any(word in f"{w.get('name', '')} {w.get('path', '')}".lower() for word in SYNC_WORDS)]
 
 
@@ -685,6 +685,11 @@ def kick_sync(api, repo):
         names = ", ".join(w.get("path", "?") for w in found) or "none"
         return False, f"{repo}: not one sync workflow ({names}), not dispatched", True
     workflow = found[0]
+    # GitHub turns a fork's schedule off after 60 days without commits, and refuses a dispatch to it
+    if workflow.get("state") == "disabled_inactivity":
+        enabled = api.request("PUT", "gentoo-zh-drafts", f"/repos/{repo}/actions/workflows/{workflow['id']}/enable")
+        if not enabled.ok:
+            return False, f"{repo}: enabling {workflow.get('path')} failed ({enabled.describe()})", False
     response, sent = api.dispatch("gentoo-zh-drafts", repo, workflow["id"], {})
     if response.ok:
         return True, f"{repo}: dispatched {workflow.get('path')}", True
