@@ -219,6 +219,30 @@ class WaitTest(unittest.TestCase):
         post = next(c for c in self.server.calls if c[0] == "POST")
         self.assertEqual((post[2], post[3]["ref"]), ("Bearer token-overlay", "master"))
 
+    def test_a_failed_producer_is_reported_and_not_waited_for(self):
+        self.route("GET", PRODUCER, (200, {}, {"workflow_runs": [{
+            "status": "completed", "conclusion": "failure", "head_branch": "v1.0", "display_title": "drafts 1.0",
+            "html_url": "https://github.com/gentoo-zh-drafts/drafts/actions/runs/5",
+            "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-01T00:05:00Z"}]}))
+        code, output = self.waiter("--deadline", "600")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.paths().count(PRODUCER), 1)
+        self.assertNotIn("left waiting: #1", output)
+        self.assertIn("::error title=bundle producer failed::#1 cat/drafts 1.0: "
+                      "https://github.com/gentoo-zh-drafts/drafts/actions/runs/5", output)
+        self.assertIn("left waiting: #3 cat/plain 1.1", output)
+
+    def test_a_producer_at_work_after_a_failure_is_waited_for(self):
+        self.route("GET", PRODUCER, (200, {}, {"workflow_runs": [
+            {"status": "completed", "conclusion": "failure", "head_branch": "v1.0",
+             "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-01T00:05:00Z"},
+            {"status": "in_progress", "conclusion": None, "head_branch": "v1.0",
+             "created_at": "2026-10-01T01:00:00Z"}]}))
+        code, output = self.waiter("--deadline", "600")
+        self.assertEqual(code, 0)
+        self.assertIn("left waiting: #1 cat/drafts 1.0", output)
+        self.assertNotIn("failed", output)
+
     def test_a_closed_issue_is_dropped(self):
         self.route("GET", f"{OVERLAY}/issues/5", OPEN, CLOSED)
         code, output = self.waiter("--deadline", "600")
