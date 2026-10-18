@@ -10,7 +10,9 @@ module Autobump
   # is one block instead of a chain of Ruby shell-outs.
   class ArtifactDiff
     SURFACE_SH = <<~'SH'
-      top=$($SUDO find "$1" -maxdepth 1 -mindepth 1 -type d | head -1)
+      # S, not the first directory: WORKDIR also holds unpacked bundles such as cargo_home or dist
+      top=$($SUDO sed -n 's/^declare -[-x]* S="\(.*\)"$/\1/p' "$3" 2>/dev/null)
+      [ -n "$top" ] && $SUDO test -d "$top" || top=$($SUDO find "$1" -maxdepth 1 -mindepth 1 -type d | head -1)
       [ -n "$top" ] || top="$1"
       {
           $SUDO find "$top" -maxdepth 3 \( -name CMakeLists.txt -o -name '*.cmake' \) \
@@ -304,7 +306,7 @@ module Autobump
     end
 
     def surface_of(wd, out)
-      system(sudo_env, 'bash', '-c', SURFACE_SH, 'bash', wd, out)
+      system(sudo_env, 'bash', '-c', SURFACE_SH, 'bash', wd, out, File.join(File.dirname(wd), 'temp/environment'))
     end
 
     def comm(flag, a, b)
