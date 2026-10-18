@@ -8,7 +8,8 @@ and every autobump-delta-* (the `waits` a shard wrote for a per-version deps art
 answered 404), for packages with `autobump` set in overlay.toml. Each round drops the items whose
 issue is closed, judges the rest, and once no autobump.yml run is active dispatches autobump.yml
 once with every issue that became ready. An item is woken once; at the deadline the ones left
-are printed. --dry-run judges one round and dispatches nothing.
+are printed. A bundle whose producer failed with nothing released is not waited for: it is
+reported as an error, and the waiter exits 1. --dry-run judges one round and dispatches nothing.
 
 GH_TOKEN is the overlay's token. The bundle reads take GH_TOKEN_<OWNER>, as bundles.py does.
 """
@@ -106,14 +107,25 @@ def wait_items(found, opted_in):
     return list(items.values())
 
 
-def ready(item, reads, index):
+def judge(item, reads, index):
+    """(state, run URL): ready, failed, or waiting."""
     if item["url"]:
-        return fetch(item["url"], method="HEAD")[0] == 200
+        return ("ready" if fetch(item["url"], method="HEAD")[0] == 200 else "waiting"), None
     spec = index.get(item["package"])
     if spec is None:
-        return False
+        return "waiting", None
     result = bundles.process_target(reads, spec, item, mode="status", events=[], run="wait")[0]
-    return result["state"] == "ready"
+    if result["state"] == "ready":
+        return "ready", None
+    for view in result["bundles"]:
+        producers = view["producers"]
+        if view["state"] == "ready" or any(p["status"] in bundles.ACTIVE for p in producers):
+            continue
+        # nothing released and nothing at work: no later round can make this bundle ready
+        failed = [p for p in producers if p["status"] == "completed" and p["conclusion"] != "success"]
+        if failed:
+            return "failed", failed[0]["run_url"]
+    return "waiting", None
 
 
 def closed(api, repo, item):
@@ -205,6 +217,7 @@ def main(argv):
 
     items = wait_items(documents(client(), args.repo, args.run_id, token), opted_in)
     until = now() + args.deadline
+    failed = []
     while items:
         api, reads = client(), bundles.GitHub()
         woken, waiting = [], []
@@ -212,9 +225,14 @@ def main(argv):
             label = f"#{item['issue']} {item['package']} {item['version']}"
             if closed(api, args.repo, item):
                 print(f"closed: {label}")
-            elif ready(item, reads, index):
+                continue
+            state, run_url = judge(item, reads, index)
+            if state == "ready":
                 print(f"ready: {label}")
                 woken.append(item)
+            elif state == "failed":
+                print(f"failed: {label}: {run_url}")
+                failed.append(f"{label}: {run_url}")
             else:
                 print(f"waiting: {label}")
                 waiting.append(item)
@@ -229,7 +247,9 @@ def main(argv):
         sleep(args.interval)
     for item in items:
         print(f"left waiting: #{item['issue']} {item['package']} {item['version']}")
-    return 0
+    for line in failed:
+        print(f"::error title=bundle producer failed::{line}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
