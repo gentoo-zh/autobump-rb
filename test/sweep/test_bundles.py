@@ -81,7 +81,7 @@ class Harness(controller.Harness):
     def setUp(self):
         super().setUp()
         (self.repo / "scripts").mkdir()
-        for name in ("autobump-sweep.py", "autobump-args.py", "autobump-judge.sh"):
+        for name in ("autobump-sweep.py", "autobump-args.py"):
             shutil.copy2(ROOT / "scripts" / name, self.repo / "scripts")
         # a copy, so a test can put a broken controller in its place
         self.bundles = self.tmp / "bundles.py"

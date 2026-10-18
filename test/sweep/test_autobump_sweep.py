@@ -98,9 +98,6 @@ if issue == "3":
     print("stage one")
     print("https://github.com/test/overlay/pull/123")
 elif issue == "4":
-    if "--accept-surface" in args and "--accept-payload" in args:
-        print("retried with the judge's acceptance")
-        raise SystemExit(0)
     print(">> current: 2.0 -> target: 3.0")
     print(f"== evidence: {os.environ['EVIDENCE_DIR']} ==")
     raise SystemExit(3)
@@ -218,7 +215,6 @@ class AutobumpSweepTest(unittest.TestCase):
             )
         )
         shutil.copy2(ROOT / "scripts" / "autobump-args.py", self.repo / "scripts")
-        shutil.copy2(ROOT / "scripts" / "autobump-judge.sh", self.repo / "scripts")
         self.write_executable(self.bin / "git", GIT)
         self.write_executable(self.bin / "gh", GH)
         self.write_executable(self.bin / "engine", ENGINE)
@@ -229,7 +225,7 @@ class AutobumpSweepTest(unittest.TestCase):
         self.gh_log = Path(self.tempdir.name) / "gh.log"
         self.gh_state = Path(self.tempdir.name) / "gh.state"
 
-    def run_sweep(self, *args, judge="", environment_extra=None, run_environment=None):
+    def run_sweep(self, *args, environment_extra=None, run_environment=None):
         environment = os.environ | (environment_extra or {}) | {
             "AUTOBUMP_ENGINE": str(self.bin / "engine"),
             "AUTOBUMP_REPO": str(self.repo),
@@ -244,14 +240,11 @@ class AutobumpSweepTest(unittest.TestCase):
             "AUTOBUMP_STATUS_BACKOFF": "0",
             "PATH": f"{self.bin}:{os.environ['PATH']}",
         }
-        environment.pop("AUTOBUMP_JUDGE", None)
         # an attempt line carries the run it came from; inherited from an Actions job, one id
         # would make every sweep here the same run, and its attempts would merge into one
         environment.pop("GITHUB_RUN_ID", None)
         environment.pop("GITHUB_RUN_ATTEMPT", None)
         environment.update(run_environment or {})
-        if judge:
-            environment["AUTOBUMP_JUDGE"] = judge
         return subprocess.run(
             [sys.executable, str(SWEEP), *args],
             cwd=self.repo,
@@ -525,10 +518,6 @@ class AutobumpSweepTest(unittest.TestCase):
         self.assertIn("try 1", summaries[0])
         self.assertIn("try 2", summaries[1])
 
-    def run_sweep_with_judge(self, *args, verdict='{"verdict":"proceed","reasons":[],"use_flags_needed":[],"deps_changed":[],"issue_comment":"ok"}'):
-        self.write_executable(self.repo / "scripts" / "autobump-judge.sh", f'#!/bin/sh\nprintf \'%s\' \'{verdict}\'\n')
-        return self.run_sweep(*args, judge="stub")
-
     def test_a_failed_comment_lookup_posts_nothing_and_says_so(self):
         result = self.run_sweep("3", "--comment", environment_extra={"GH_API_FAIL": "1"})
 
@@ -544,21 +533,8 @@ class AutobumpSweepTest(unittest.TestCase):
         self.assertIn("#12  done (precondition: overlay already at/ahead of 9.0)", result.stdout)
         self.assertIn("cat/ahead 9.0 done-precondition", self.done.read_text())
 
-    def test_a_judge_that_accepts_gets_the_bump_retried(self):
-        result = self.run_sweep_with_judge("4")
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("#4  bumped (judge accepted surface delta)", result.stdout)
-        self.assertIn("cat/escalate 3.0 bumped-after-judge", self.done.read_text())
-        retry = self.engine_calls()[-1]
-        # the retry must carry the acceptance, or it just re-runs the escalation it came from
-        self.assertIn("--accept-surface", retry)
-        self.assertIn("--accept-payload", retry)
-
-    def test_a_judge_that_declines_leaves_the_escalation(self):
-        result = self.run_sweep_with_judge(
-            "4", verdict='{"verdict":"human","reasons":["needs a person"],"use_flags_needed":[],"deps_changed":[],"issue_comment":"x"}'
-        )
+    def test_an_escalation_is_not_retried_with_acceptance(self):
+        result = self.run_sweep("4")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("#4  escalated", result.stdout)
