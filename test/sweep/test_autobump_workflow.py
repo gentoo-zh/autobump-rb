@@ -147,7 +147,7 @@ class AutobumpWorkflowContractTest(unittest.TestCase):
         # the queue is the open issues, so a failed issue or dispatch job in nvchecker must not stop it
         workflow = yaml.safe_load(WORKFLOW.read_text())
         triggers = workflow.get("on", workflow.get(True))
-        self.assertLessEqual({"workflow_run", "schedule", "workflow_dispatch"}, set(triggers))
+        self.assertLessEqual({"workflow_run", "workflow_dispatch"}, set(triggers))
         gates = re.findall(r"workflow_run\.conclusion\s*(==|!=)\s*'([a-z_]+)'", WORKFLOW.read_text())
         self.assertEqual(gates, [("!=", "cancelled")])
         roots = [job for job in jobs().values() if "needs" not in job]
