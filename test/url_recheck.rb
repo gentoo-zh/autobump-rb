@@ -117,6 +117,41 @@ check 'a finding whose field cannot be read has none', unparsed, [['https://x.ex
 check 'a finding whose field cannot be read counts as touched',
       Autobump::Finalize.records_this_bump_touched(unparsed, []), unparsed
 
+# pkgcheck-net.txt of the anytype-bin 0.57.3 escalation, verbatim
+anytype_net = <<~OUT
+  app-office/anytype-bin
+    DeadUrl: version 0.57.3: metadata.xml: changelog: 403 Client Error: Forbidden for url: https://community.anytype.io/tag/release-notes/153
+    DeadUrl: version 0.57.3: metadata.xml: bugs-to: 403 Client Error: Forbidden for url: https://community.anytype.io/c/bug-report/7
+  pkgcheck scan: error: git failed applying stash: No stash entries found.
+OUT
+R = Autobump::Finalize.method(:url_records_to_recheck)
+def outcome
+  [:recheck, yield]
+rescue Autobump::Abort => e
+  [:defer, e.message]
+end
+got = outcome { R.call(anytype_net, 2, 'app-office/anytype-bin', []) }
+check 'a scan pkgcheck failed defers, naming the error',
+      [got[0], got[1].include?('git failed applying stash')], [:defer, true]
+check 'a pkgcheck error line defers whatever the exit status',
+      outcome { R.call(anytype_net, 0, 'app-office/anytype-bin', []) }.first, :defer
+check 'an unexpected exit status defers',
+      outcome { R.call("app-office/anytype-bin\n", 137, 'app-office/anytype-bin', []) }.first, :defer
+check 'a signal-killed scan defers',
+      outcome { R.call('', nil, 'app-office/anytype-bin', []) }.first, :defer
+anytype_findings = anytype_net.lines.grep_v(/pkgcheck scan: error/).join
+check 'the anytype findings on an untouched metadata.xml leave nothing to recheck',
+      outcome { R.call(anytype_findings, 0, 'app-office/anytype-bin', %w[KEYWORDS]) }, [:recheck, []]
+
+src_net = <<~OUT
+  app-office/anytype-bin
+    DeadUrl: version 0.57.4: SRC_URI: 404 Client Error: Not Found for url: https://github.com/anyproto/anytype-ts/releases/download/v0.57.4/anytype_0.57.4_amd64.deb
+OUT
+src_url = 'https://github.com/anyproto/anytype-ts/releases/download/v0.57.4/anytype_0.57.4_amd64.deb'
+check 'a dead source on a changed SRC_URI is still rechecked',
+      outcome { R.call(src_net, 1, 'app-office/anytype-bin', %w[SRC_URI]) }, [:recheck, [[src_url, 'SRC_URI']]]
+check 'and a stable 404 on it escalates', V.call(["#{src_url} -> 404"]), :dead
+
 puts '----'
 puts $fail.zero? ? 'url_recheck: all passed' : "url_recheck: #{$fail} failed"
 exit($fail.zero? ? 0 : 1)
