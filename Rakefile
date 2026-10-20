@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-task default: %i[syntax sweep decisions pr_body pr_push heavy_dep cli_flags payload_diff surface_root cargo_features toolchain rewrite gui_probe probe_hang gui_launchers build_dispatch fetch_failure sh_timeout distfiles_outcome bundle_status bundle_controller bundle_wait deps_artifact_url dynamic_source_pin preflight_guards version_compare url_recheck remote_pick gates]
+task default: %i[syntax sweep decisions pr_body pr_push heavy_dep cli_flags payload_diff payload_removals surface_root cargo_features toolchain rewrite gui_probe probe_hang gui_launchers build_dispatch fetch_failure sh_timeout distfiles_outcome bundle_status bundle_controller bundle_wait deps_artifact_url dynamic_source_pin preflight_guards version_compare url_recheck remote_pick gates]
 
 desc 'ruby -c on all sources'
 task :syntax do
@@ -34,6 +34,11 @@ end
 desc 'payload path-diff fold rules (hermetic)'
 task :payload_diff do
   sh 'ruby test/payload_diff.rb'
+end
+
+desc 'which payload removals wait for the build, and what the build decides (hermetic)'
+task :payload_removals do
+  sh 'ruby test/payload_removals.rb'
 end
 
 desc 'build-option surface read from S (hermetic)'

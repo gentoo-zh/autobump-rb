@@ -1,8 +1,10 @@
 # frozen_string_literal: true
+require 'open3'
 require 'shellwords'
 module Autobump
   # Stage 5: artifact diff. Prebuilt payload -> unpack both and diff the file tree
-  # (a removed path is dangerous unless it is a version-embedded rename). Source ->
+  # (a removed path is dangerous unless it is a version-embedded rename, or nothing in either
+  # tree, the ebuild or files/ can still need it and BuildTest's smoke test runs). Source ->
   # diff the build-option surface (cmake/meson/autotools/cargo); a changed surface
   # may need a USE flag or dependency.
   #
@@ -189,6 +191,18 @@ module Autobump
       churned += (real_removed.size - kept_removed.size) + (real_added.size - kept_added.size)
       real_removed, real_added = kept_removed, kept_added
 
+      # (7) a native module rebuilt for a new runtime ABI: openchamber's node-pty moved
+      #     prebuilds/linux-x64-148/pty.node to linux-x64-149/pty.node with its Electron. Only
+      #     whole numbers between `-`, `_` or `.` in the parent directory's name are blanked, so
+      #     the `64` of `x64` stays and an x86 module is no rename of an x64 one; the pair must be 1:1.
+      abi_key = lambda do |p|
+        parent = File.dirname(p)
+        "#{dir_of.call(parent)}/#{File.basename(parent).gsub(/(?<![^-_.])\d+(?![^-_.])/, VER_HOLE)}/#{File.basename(p)}"
+      end
+      real_removed, real_added, folded =
+        fold_pairs(real_removed, real_added, candidate: ->(p) { p.end_with?('.node') }, key: abi_key)
+      churned += folded
+
       [real_removed, real_added, churned]
     end
 
@@ -241,6 +255,90 @@ module Autobump
       kept_added = drop_added ? added.reject(&candidate) : added.reject(&folds)
       [kept_removed, kept_added,
        (removed.size - kept_removed.size) + (added.size - kept_added.size)]
+    end
+
+    # A structural removal waits for the build only when nothing could still need it. A file
+    # that was executable, a shared object or native module, a desktop entry or unit file needs
+    # a human, except the libraries a newer Electron stops shipping beside its binary
+    # (openchamber, kiro): those pass when no ELF object in the new tree still NEEDs them.
+    ANGLE_FILES = %w[libEGL.so libGLESv2.so libvk_swiftshader.so vk_swiftshader_icd.json].freeze
+    ELECTRON_MARKERS = %w[resources.pak icudtl.dat v8_context_snapshot.bin snapshot_blob.bin].freeze
+    ELECTRON_HELPERS = %w[chrome-sandbox chrome_crashpad_handler].freeze
+    NATIVE_OBJECT = /\.(?:so(?:\.\d+)*|node)\z/
+    CONSUMER_FILE = /\.(?:desktop|service|socket|timer)\z/
+    ICON_FILE = /\.(?:png|svg|xpm|ico)\z/
+    TEXT_FILE_CAP = 256 * 1024
+    TEXT_TOTAL_CAP = 64 * 1024 * 1024
+    # the new tree's .desktop entries, scripts and small configs that mention a removed name;
+    # TRUNCATED on stderr when one of those configs reaches the per-file cap or they add up to
+    # more than the total cap. Executables at or over the per-file cap are skipped: they are
+    # binaries (Electron's main binary is ~170 MB), and a script is not that large. A grep that
+    # fails rather than finds nothing exits 255, so xargs stops with 124; with pipefail that,
+    # an awk failure, or a child killed by a signal (xargs 125) all fail the read.
+    TEXT_HITS_SH = <<~'SH'
+      set -o pipefail
+      list=$($SUDO find "$1" -type f \( \( -name '*.desktop' -o -name '*.sh' -o -name '*.json' \
+          -o -name '*.ini' -o -name '*.conf' -o -name '*.yml' -o -name '*.yaml' -o -name '*.service' \) \
+          -printf 't %s %p\n' -o -perm /111 -size -"$3"c -printf 'x %s %p\n' \)) || exit 2
+      printf '%s\n' "$list" \
+        | awk -v fcap="$3" -v cap="$4" 'stop || !NF { next }
+            { total += $2 }
+            ($1 == "t" && $2 >= fcap) || total > cap { print "TRUNCATED" > "/dev/stderr"; stop = 1; next }
+            { sub(/^[tx] [0-9]+ /, ""); printf "%s%c", $0, 0 }' \
+        | xargs -0 -r sh -c '"$@"; [ $? -le 1 ] || exit 255' sh $SUDO grep -IHnFZ -f "$2" --
+    SH
+
+    # Why each removal still needs a human; empty when the build may decide them all. Pure, so
+    # test/payload_removals.rb can pin every condition. Returns [[path, reason], ...].
+    #   old_exec       paths that were executable in the old tree
+    #   refs           {name => text} of the new ebuild and every file under files/
+    #   text_hits      [[path, line]] from the new tree's .desktop entries, scripts and configs
+    #   text_complete  false when one of those configs reached TEXT_FILE_CAP or all exceeded
+    #                  TEXT_TOTAL_CAP, so not all were read
+    #   needed         {path => [NEEDED entries]} of the new tree's ELF objects; nil if unknown
+    def self.removal_blockers(removed, new_tree:, old_exec:, refs:, text_hits:, text_complete:, needed:)
+      blockers = []
+      unless text_complete
+        blockers << ['(all)', "the new tree's text files were not all read (one reaches #{TEXT_FILE_CAP} bytes " \
+                              "or all exceed #{TEXT_TOTAL_CAP})"]
+      end
+      removed.each do |p|
+        base = File.basename(p)
+        # Electron's libraries are often mode 755, so their own rule comes before the mode
+        why = if ANGLE_FILES.include?(base) then angle_blocker(p, new_tree, needed)
+              elsif old_exec.include?(p) then 'executable in the old tree'
+              elsif base.match?(CONSUMER_FILE) then 'a desktop entry or unit file'
+              elsif base.match?(NATIVE_OBJECT) then 'a shared object or native module'
+              end
+        # a .desktop entry names its icon without the extension
+        icon = "Icon=#{base.sub(ICON_FILE, '')}" if base.match?(ICON_FILE)
+        why ||= mention(refs, base, icon) || mention(text_hits, base, icon)
+        blockers << [p, why] if why
+      end
+      blockers
+    end
+
+    def self.mention(sources, base, icon)
+      sources.each do |name, text|
+        line = text.each_line.find { |l| l.include?(base) || (icon && l.strip == icon) }
+        return "#{name} names it: #{line.strip}" if line
+      end
+      nil
+    end
+
+    def self.angle_blocker(path, new_tree, needed)
+      dir = File.dirname(path)
+      return 'not beside an Electron binary in the new tree' unless ELECTRON_MARKERS.any? { |m| new_tree.include?("#{dir}/#{m}") }
+      return 'NEEDED of the new tree unknown (scanelf failed)' if needed.nil?
+
+      main = needed.keys.select do |f|
+        File.dirname(f) == dir && !File.basename(f).include?('.') && !ELECTRON_HELPERS.include?(File.basename(f))
+      end
+      return 'no Electron binary beside it in the new tree' if main.empty?
+
+      # a NEEDED entry may be spelled as a path (/opt/app/libEGL.so)
+      user = needed.find { |_f, libs| libs.any? { |l| File.basename(l) == File.basename(path) } }
+      "still NEEDED by #{user[0]}" if user
     end
 
     def initialize(ctx) = (@c = ctx)
@@ -318,15 +416,16 @@ module Autobump
     end
 
     # payload branch (396-431): removed path is dangerous unless it is a benign
-    # version-embedded rename (old path with OLD_PV->NEWVER appears in added).
+    # version-embedded rename (old path with OLD_PV->NEWVER appears in added). A removal that
+    # removal_blockers cannot tie to anything is left to BuildTest instead of escalating here.
     def payload_diff
       c = @c
       if c.old_distfile_missing
         Log.log 'payload: OLD distfile unavailable -> tree diff skipped; the PR is flagged "no diff" for human review'
         return
       end
-      tree_of(File.basename(c.old_ebuild), ev('tree-old.txt')) or (raise Abort, 'unpack old failed')
-      tree_of(File.basename(c.new_ebuild), ev('tree-new.txt')) or (raise Abort, 'unpack new failed')
+      wd_old = tree_of(File.basename(c.old_ebuild), ev('tree-old.txt')) or (raise Abort, 'unpack old failed')
+      wd_new = tree_of(File.basename(c.new_ebuild), ev('tree-new.txt')) or (raise Abort, 'unpack new failed')
       File.write(ev('tree-removed.txt'), comm('-23', ev('tree-old.txt'), ev('tree-new.txt')))
       File.write(ev('tree-added.txt'),   comm('-13', ev('tree-old.txt'), ev('tree-new.txt')))
       removed = File.readlines(ev('tree-removed.txt')).map(&:chomp).reject(&:empty?)
@@ -340,17 +439,62 @@ module Autobump
       File.write(ev('tree-added-real.txt'),   real_added.empty?   ? '' : real_added.join("\n") + "\n")
       File.write(ev('tree-churn-count.txt'), churned.to_s)
       if real_removed.any? && !c.accept_payload
-        puts real_removed.first(20).join("\n")
-        puts "== payload layout changed (#{real_removed.size} structural removals / #{real_added.size} additions; #{churned} asset-churn + version-renames ignored);"
-        puts '== a removed path may be a real break (renamed .desktop) or benign (dropped icon size).'
-        puts '== inspect tree-removed-real.txt, then re-run with --accept-payload if harmless.'
-        raise Escalate.new('payload layout changed', c.evidence.dir)
-      end
-      if real_removed.any?
+        blockers = removal_blockers_of(real_removed, new_tree, wd_old, wd_new)
+        blockers << ['(all)', 'only an install and smoke test can clear them, and this run does not build (--install)'] \
+          unless c.install && !c.diff_only
+        if blockers.any?
+          File.write(ev('tree-removed-blocked.txt'), blockers.map { |p, why| "#{p}\t#{why}\n" }.join)
+          puts real_removed.first(20).join("\n")
+          puts "== payload layout changed (#{real_removed.size} structural removals / #{real_added.size} additions; #{churned} asset-churn + version-renames ignored);"
+          puts blockers.first(20).map { |p, why| "== #{p}: #{why}" }.join("\n")
+          puts '== inspect tree-removed-blocked.txt, then re-run with --accept-payload if harmless.'
+          path, why = blockers.first
+          raise Escalate.new("payload layout changed (#{path}: #{why[0, 160]})", c.evidence.dir)
+        end
+        # BuildTest accepts them after a clean install and a smoke test that ran the app
+        c.payload_pending = real_removed
+        Log.log "payload: #{real_removed.size} removed path(s) named nowhere; the install and smoke test decide"
+      elsif real_removed.any?
         puts real_removed.first(20).join("\n")
         Log.log "payload: #{real_removed.size} removed path(s) accepted as harmless (--accept-payload)"
       end
       Log.ok "payload tree: #{real_added.size} new / #{real_removed.size} removed structural (#{churned} asset-churn/version-renames ignored)"
+    end
+
+    # Gather what removal_blockers reads from the two unpacked trees and the package directory.
+    def removal_blockers_of(removed, new_tree, wd_old, wd_new)
+      c = @c
+      modes, modes_ok = Open3.capture2(sudo_env, 'bash', '-c', '$SUDO find "$1" -type f -perm /111 -printf "%P\n"',
+                                       'bash', wd_old)
+      files = Dir.glob('files/**/*', base: c.pkgdir).select { |f| File.file?(File.join(c.pkgdir, f)) }
+      refs = ([File.basename(c.new_ebuild)] + files).to_h do |f|
+        [f, File.read(File.join(c.pkgdir, f), encoding: 'UTF-8').scrub]
+      end
+      patterns = removed.map { |p| File.basename(p) } +
+                 removed.grep(ICON_FILE).map { |p| "Icon=#{File.basename(p).sub(ICON_FILE, '')}" }
+      File.write(ev('tree-removed-patterns.txt'), patterns.uniq.join("\n") + "\n")
+      hits, errs, read = Open3.capture3(sudo_env, 'bash', '-c', TEXT_HITS_SH, 'bash', wd_new,
+                                   ev('tree-removed-patterns.txt'), TEXT_FILE_CAP.to_s, TEXT_TOTAL_CAP.to_s)
+      # grep -Z ends the file name with NUL, so a `:` in the path cannot shift the fields
+      text_hits = hits.scrub.lines.filter_map do |l|
+        file, rest = l.chomp.split("\0", 2)
+        _lineno, line = rest.to_s.split(':', 2)
+        [file.delete_prefix("#{wd_new}/"), line] if line
+      end
+      elf, ok = Open3.capture2(sudo_env, 'bash', '-c', '$SUDO scanelf -qRyBF "%F;%n" "$1" 2>/dev/null',
+                               'bash', wd_new)
+      needed = if ok.success?
+                 elf.scrub.lines.to_h do |l|
+                   file, libs = l.chomp.split(';', 2)
+                   [file.delete_prefix("#{wd_new}/"), libs.to_s.split(',')]
+                 end
+               end
+      blockers = self.class.removal_blockers(removed, new_tree: new_tree, old_exec: modes.lines.map(&:chomp),
+                                             refs: refs, text_hits: text_hits,
+                                             text_complete: !errs.include?('TRUNCATED'), needed: needed)
+      blockers.unshift(['(all)', 'the old tree\'s file modes could not be read']) unless modes_ok.success?
+      blockers.unshift(['(all)', "the new tree's text files could not be read: #{errs.strip[0, 120]}"]) unless read.success?
+      blockers
     end
 
     CARGO_FEATURE = /\Acargo-feature:([a-z0-9_-]+)/
