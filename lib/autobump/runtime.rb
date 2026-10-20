@@ -27,6 +27,7 @@ module Autobump
     :old_ebuild, :old_pvr, :old_pv, :old_pvr_presync, :new_ebuild, :branch, :evidence,
     :multiarch, :gui, :payload, :smoke, :armed, :old_distfile_missing, :keep_old,
     :rewrite_var, :rewrite_url, :rewrite_regex, :copied_ebuild, :bundles, :gui_failures,
+    :accepted_diffs,
     keyword_init: true
   ) do
     # run a command; return [combined stdout+stderr, ok?, exit_code]. Array form (never a

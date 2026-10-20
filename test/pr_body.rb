@@ -154,6 +154,30 @@ plain = Autobump::PR.create_args(repo: 'gentoo-zh/overlay', head: 'b', title: 't
                                  multiarch: false)
 check_eq 'multi-arch opens a draft', draft.include?('--draft'), true
 check_eq 'single-arch does not', plain.include?('--draft'), false
+accepted = Autobump::PR.create_args(repo: 'gentoo-zh/overlay', head: 'b', title: 't', body_file: 'f',
+                                    multiarch: false, accepted: true)
+check_eq 'an accepted difference opens a draft', accepted.include?('--draft'), true
+
+# K. a difference a rule accepted instead of escalating is listed, so the reviewer sees what
+# the green build did not vouch for
+check 'accepted differences are listed under a draft warning',
+      render(ctx(ev_with('k', 'surface-added.txt' => '', 'surface-removed.txt' => ''),
+                 pkg: 'a/b-bin', old_pvr: '1', newver: '2', old_pv: '1', payload: false, smoke: 'ok',
+                 accepted_diffs: ['payload removed paths accepted: usr/lib/b/libold.so', 'major version 1 → 2'])),
+      must: ["\nWarning: autobump accepted these differences, so this PR is a draft — review them before merging\n" \
+             "- payload removed paths accepted: usr/lib/b/libold.so\n- major version 1 → 2\n"]
+
+# an empty list changes nothing: the whole body is what it was before the list existed
+plain_ctx = lambda do |**kw|
+  ctx(ev_with('k2', 'surface-added.txt' => '', 'surface-removed.txt' => ''),
+      pkg: 'net-misc/tsshd', old_pvr: '0.1.8', newver: '0.1.9', old_pv: '0.1.8', payload: false,
+      issue: '11090', smoke: 'installed', **kw)
+end
+check_eq 'no accepted differences -> the body is unchanged', render(plain_ctx.call(accepted_diffs: []), cc: '@vimimg'),
+         "**`net-misc/tsshd`** 0.1.8 → 0.1.9 — nvchecker bump\n\n- [x] emerge build + install\n" \
+         "- [x] `pkgcheck scan --commits --net` clean\n- smoke: installed\n" \
+         "- diff vs 0.1.8: no build-option surface changes\n\nCloses #11090 · cc @vimimg\n"
+check_eq 'an empty list renders like an unset one', render(plain_ctx.call(accepted_diffs: [])), render(plain_ctx.call)
 
 # the open-PR guard: a blip must not cost a bump that is already built, and a refusal must
 # say what gh said
