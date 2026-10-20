@@ -40,10 +40,11 @@ module Autobump
     HASH_NAME = /\A(?<stem>.+[-.])(?<run>[A-Za-z0-9_-]{7,})(?<ext>\.[A-Za-z0-9]+(?:\.(?:map|LICENSE\.txt))?)\z/
     # A script or style bundle: what rule (4) treats as a chunk, on top of an integer name.
     CHUNK_EXT = /\.(?:js|mjs|cjs|css)(?:\.map|\.LICENSE\.txt)?\z/
-    # Rule (6): non-ELF asset names inside an app tree; .so, .node and extensionless files never match.
+    # Rule (6): inside an app tree every file is an asset except native objects, launchers and
+    # extensionless files, which may be executables; licence files are assets despite no extension.
     APP_TREE = %r{(?:\A|/)(?:resources/app|node_modules)/}
-    APP_ASSET = /(?:\.(?:[cm]?js|jsx|[cm]?ts|tsx|json|map|css|txt|md|png|svg|jpe?g|gif|webp|ico)|
-                 \A(?:LICEN[CS]E|COPYING|NOTICE|README|CHANGELOG|AUTHORS)(?:[.-].*)?)\z/xi
+    APP_NATIVE = /\.(?:so(?:\.[0-9]+)*|node|desktop|sh)\z/
+    LICENCE_NAME = /\A(?:LICEN[CS]E|COPYING|NOTICE|README|CHANGELOG|AUTHORS)(?:[.-].*)?\z/i
 
     # A base64url content hash, as vite and rollup spell it: an upper-case letter plus
     # something that is not upper-case, so BIS-CJUO and u_Su6bzX read as hashes while a word
@@ -180,7 +181,10 @@ module Autobump
 
       # (6) application assets: moved bundles and re-hoisted node_modules are churn; ELF objects,
       #     launchers and .desktop files outside these trees still count.
-      app_asset = ->(p) { p.match?(APP_TREE) && File.basename(p).match?(APP_ASSET) }
+      app_asset = lambda do |p|
+        base = File.basename(p)
+        p.match?(APP_TREE) && !base.match?(APP_NATIVE) && (base.include?('.') || base.match?(LICENCE_NAME))
+      end
       kept_removed, kept_added = real_removed.reject(&app_asset), real_added.reject(&app_asset)
       churned += (real_removed.size - kept_removed.size) + (real_added.size - kept_added.size)
       real_removed, real_added = kept_removed, kept_added
