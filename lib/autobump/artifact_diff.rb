@@ -353,6 +353,38 @@ module Autobump
       Log.ok "payload tree: #{real_added.size} new / #{real_removed.size} removed structural (#{churned} asset-churn/version-renames ignored)"
     end
 
+    CARGO_FEATURE = /\Acargo-feature:([a-z0-9_-]+)/
+    # Cargo feature names contain `-`, so unlike grep -w a `-` also continues a word: `cli` is
+    # not named by the `${PN/-cli/}` of cc-switch-cli, nor `gui` by `guide`.
+    FEATURE_CHAR = '[A-Za-z0-9_-]'
+    # a bash array whose name ends in `features`, such as `local myfeatures=( … )`
+    FEATURE_ARRAY = /features\+?=\((?<body>(?:[^()]|\(\g<body>\))*)\)/mi
+
+    def self.names_word?(text, word)
+      text.match?(/(?<!#{FEATURE_CHAR})#{Regexp.escape(word)}(?!#{FEATURE_CHAR})/)
+    end
+
+    # `default` is also the phase helper most ebuilds call, so it counts only where the ebuild
+    # handles default features: --no-default-features, or `default` in a features list.
+    def self.names_default_features?(text)
+      return true if text.include?('default-features')
+
+      lists = text.each_line.grep(/features/i) + text.scan(FEATURE_ARRAY).flatten
+      lists.any? { |l| names_word?(l, 'default') }
+    end
+
+    # The surface lines for Cargo features the ebuild never names. Cargo builds `default` plus
+    # the features the ebuild passes (--features, myfeatures, usually behind a USE flag), so
+    # adding or removing any other one leaves the ebuild as it is.
+    def self.ignored_cargo_features(lines, ebuild_text)
+      lines.select do |l|
+        name = l[CARGO_FEATURE, 1] or next false
+        next !names_default_features?(ebuild_text) if name == 'default'
+
+        !names_word?(ebuild_text, name)
+      end
+    end
+
     # source branch (432-454): build-option surface delta.
     def source_surface(wd_old, wd_new)
       c = @c
@@ -360,11 +392,24 @@ module Autobump
       surface_of(wd_new, ev('surface-new.txt'))
       File.write(ev('surface-removed.txt'), comm('-23', ev('surface-old.txt'), ev('surface-new.txt')))
       File.write(ev('surface-added.txt'),   comm('-13', ev('surface-old.txt'), ev('surface-new.txt')))
-      sdel = File.readlines(ev('surface-removed.txt')).reject { |l| l.strip.empty? }.size
-      sadd = File.readlines(ev('surface-added.txt')).reject { |l| l.strip.empty? }.size
+      removed = File.readlines(ev('surface-removed.txt')).reject { |l| l.strip.empty? }
+      added = File.readlines(ev('surface-added.txt')).reject { |l| l.strip.empty? }
+      # cc-switch-cli 5.11.1 and gitoxide 0.60.0 escalated on features neither ebuild selects
+      text = File.read(c.new_ebuild, encoding: 'UTF-8').scrub
+      ign_del = ArtifactDiff.ignored_cargo_features(removed, text)
+      ign_add = ArtifactDiff.ignored_cargo_features(added, text)
+      ignored = ign_add.map { |l| "+#{l}" } + ign_del.map { |l| "-#{l}" }
+      unless ignored.empty?
+        File.write(ev('surface-ignored.txt'), ignored.join)
+        Log.log "surface: #{ignored.size} Cargo feature change(s) the ebuild does not name ignored " \
+                "(#{ev('surface-ignored.txt')})"
+      end
+      sdel = (removed - ign_del).size
+      sadd = (added - ign_add).size
       if (sdel + sadd).positive? && !c.accept_surface
         puts '--- surface added ---';   print File.read(ev('surface-added.txt'))
         puts '--- surface removed ---'; print File.read(ev('surface-removed.txt'))
+        puts '--- ignored: Cargo features the ebuild does not name ---', ignored.join unless ignored.empty?
         puts "== build-option surface changed (+#{sadd}/-#{sdel}): may need USE/RDEPEND changes."
         puts '== judge the evidence, then re-run with --accept-surface if it is harmless.'
         raise Escalate.new('build-option surface changed', c.evidence.dir)
