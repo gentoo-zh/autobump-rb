@@ -3,7 +3,7 @@ require 'shellwords'
 module Autobump
   # Stage 8: PR. Push the branch (bail if a review PR is already open on it), open a
   # PR that cc's the package's github_account from overlay.toml, marks multi-arch
-  # bumps draft, and notes GUI uncertainty.
+  # bumps draft, and notes GUI uncertainty and accepted differences.
   class PR
     OVERLAY_TOML = '.github/workflows/overlay.toml'
     # github_account is a login or a list of logins; Ruby has no TOML parser, python3 does.
@@ -38,11 +38,13 @@ module Autobump
 
     # A multi-arch bump is opened as a draft: only amd64 was built here, so the other
     # keywords are untested until a human says otherwise. So is one whose GUI launch probe
-    # failed: reasonix-desktop merged five bumps that installed no Electron shell.
-    def self.create_args(repo:, head:, title:, body_file:, multiarch:, gui_failed: false)
+    # failed: reasonix-desktop merged five bumps that installed no Electron shell. So is one
+    # that passed only because a rule accepted a difference it would otherwise escalate on:
+    # a green build is not the review that difference needs.
+    def self.create_args(repo:, head:, title:, body_file:, multiarch:, gui_failed: false, accepted: false)
       args = ['gh', 'pr', 'create', '--repo', repo, '--base', 'master',
               '--head', head, '--title', title, '--body-file', body_file]
-      args << '--draft' if multiarch || gui_failed
+      args << '--draft' if multiarch || gui_failed || accepted
       args
     end
 
@@ -98,7 +100,8 @@ module Autobump
       File.write(body, pr_body)
       subj = `git -C #{cfg.repo.shellescape} log -1 --format=%s`.strip
       args = PR.create_args(repo: cfg.upstream_repo, head: head, title: subj, body_file: body,
-                            multiarch: c.multiarch, gui_failed: !c.gui_failures.to_a.empty?)
+                            multiarch: c.multiarch, gui_failed: !c.gui_failures.to_a.empty?,
+                            accepted: !c.accepted_diffs.to_a.empty?)
       raise Abort, 'gh pr create failed' unless system(*args)
       Log.ok 'PR opened'
     end
@@ -135,6 +138,7 @@ module Autobump
       lines << rewrite_line if rewrite_line
       lines += diff_lines
       lines += gui_failure_lines
+      lines += accepted_lines
       meta = []
       meta << "Closes ##{c.issue}" if c.issue
       ccs = maintainer_ccs
@@ -149,6 +153,15 @@ module Autobump
 
       ['', 'Warning: the GUI launch probe failed, so this PR is a draft — launch the app before merging',
        *failures.map { |bin, outcome| "- `#{bin}`: #{outcome}" }]
+    end
+
+    # What a rule let through instead of escalating, one human-readable line each
+    def accepted_lines
+      accepted = @c.accepted_diffs.to_a
+      return [] if accepted.empty?
+
+      ['', 'Warning: autobump accepted these differences, so this PR is a draft — review them before merging',
+       *accepted.map { |d| "- #{d}" }]
     end
 
     # A rewritten variable is an opaque token a reviewer cannot check by eye, so the PR

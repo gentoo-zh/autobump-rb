@@ -50,14 +50,15 @@ Dir.mktmpdir('autobump-pr-') do |dir|
   File.chmod(0o755, *Dir[File.join(bin, '*')])
   ENV['PATH'] = "#{bin}:#{ENV.fetch('PATH')}"
 
-  run = lambda do |fails, error = '', gui_failures: nil|
+  run = lambda do |fails, error = '', gui_failures: nil, accepted_diffs: nil|
     [pushes, creates].each { |f| FileUtils.rm_f(f) }
     ENV['FAKE_PUSH_FAILS'] = fails.to_s
     ENV['FAKE_PUSH_ERROR'] = error
     cfg = Struct.new(:repo, :push_remote, :upstream_repo).new(dir, 'origin', 'gentoo-zh/overlay')
     c = Autobump::Context.new(cfg: cfg, pkg: 'app-misc/fixture', pr: true, branch: 'app-misc-fixture-1.2.3',
                               old_pvr: '1.2.2', newver: '1.2.3', smoke: 'installed',
-                              evidence: Autobump::Evidence.new('fixture'), gui_failures: gui_failures)
+                              evidence: Autobump::Evidence.new('fixture'), gui_failures: gui_failures,
+                              accepted_diffs: accepted_diffs)
     stage = Stage.new(c)
     out = $stdout
     $stdout = StringIO.new
@@ -106,6 +107,15 @@ Dir.mktmpdir('autobump-pr-') do |dir|
   r = run.call(0)
   check 'a clean probe does not', r[:creates].map { |l| l.include?('--draft') }, [false]
   check 'nor warns', r[:body].include?('GUI launch probe failed'), false
+
+  r = run.call(0, accepted_diffs: ['payload removed paths accepted: usr/lib/fixture/libold.so'])
+  check 'an accepted difference opens a draft', r[:creates].map { |l| l.include?('--draft') }, [true]
+  check 'whose body lists it',
+        r[:body].include?("so this PR is a draft — review them before merging\n" \
+                          "- payload removed paths accepted: usr/lib/fixture/libold.so\n"), true
+  r = run.call(0, accepted_diffs: [])
+  check 'an empty list does not', r[:creates].map { |l| l.include?('--draft') }, [false]
+  check 'nor lists anything', r[:body].include?('accepted these differences'), false
 end
 
 puts '----'
