@@ -44,8 +44,15 @@ module Autobump
     def self.create_args(repo:, head:, title:, body_file:, multiarch:, gui_failed: false, accepted: false)
       args = ['gh', 'pr', 'create', '--repo', repo, '--base', 'master',
               '--head', head, '--title', title, '--body-file', body_file]
-      args << '--draft' if multiarch || gui_failed || accepted
+      args << '--draft' unless draft_reasons(multiarch: multiarch, gui_failed: gui_failed, accepted: accepted).empty?
       args
+    end
+
+    # Why the PR is a draft, in the words the sweep copies into the issue's status comment
+    def self.draft_reasons(multiarch:, gui_failed: false, accepted: false)
+      [('only amd64 was built' if multiarch),
+       ('the GUI launch probe failed' if gui_failed),
+       ('autobump accepted a difference' if accepted)].compact
     end
 
     PUSH_BACKOFF = [5, 15].freeze
@@ -99,11 +106,12 @@ module Autobump
       body = c.evidence.path('pr-body.md')
       File.write(body, pr_body)
       subj = `git -C #{cfg.repo.shellescape} log -1 --format=%s`.strip
-      args = PR.create_args(repo: cfg.upstream_repo, head: head, title: subj, body_file: body,
-                            multiarch: c.multiarch, gui_failed: !c.gui_failures.to_a.empty?,
-                            accepted: !c.accepted_diffs.to_a.empty?)
+      draft = { multiarch: c.multiarch, gui_failed: !c.gui_failures.to_a.empty?,
+                accepted: !c.accepted_diffs.to_a.empty? }
+      args = PR.create_args(repo: cfg.upstream_repo, head: head, title: subj, body_file: body, **draft)
       raise Abort, 'gh pr create failed' unless system(*args)
-      Log.ok 'PR opened'
+      reasons = PR.draft_reasons(**draft)
+      Log.ok(reasons.empty? ? 'PR opened' : "PR opened (draft: #{reasons.join('; ')})")
     end
 
     private
