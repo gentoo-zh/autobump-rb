@@ -3,7 +3,7 @@
 # Hermetic dispatch test for BuildTest#run. Run: ruby test/build_dispatch.rb
 require_relative '../lib/autobump'
 
-Context = Struct.new(:payload, :install, :smoke)
+Context = Struct.new(:payload, :install, :smoke, :payload_pending)
 
 class DispatchProbe < Autobump::BuildTest
   attr_reader :calls

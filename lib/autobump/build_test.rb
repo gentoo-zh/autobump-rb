@@ -9,6 +9,8 @@ module Autobump
   #  - --install: copy into the live overlay if separate, accept ~amd64 overlay-wide,
   #    emerge with CI's exact elog config, gate on the elog byte-for-byte like CI,
   #    smoke the version, advisory GUI launch probe, advisory qa-vdb linked-libs check.
+  #  - Payload removals ArtifactDiff left pending: accepted only after a clean install and a
+  #    smoke test that ran the app (a version match or a 15s GUI launch), else escalated.
   # Defers (Abort, exit 2) on a timeout or a local dependency-resolution gap; escalates
   # (exit 3) on a real build/QA failure.
   class BuildTest
@@ -91,9 +93,37 @@ module Autobump
         Log.log 'source package: not build-tested without --install (surface-diff only); --pr implies --install'
       end
       install_and_smoke if c.install
+      settle_payload_removals if c.payload_pending
+    end
+
+    # What clears the removals ArtifactDiff found named nowhere: a clean install plus a smoke
+    # test that really ran the app. Returns nil to accept, else the reason to escalate.
+    def self.payload_verdict(install:, version_ok:, gui_launched:, gui_failures:)
+      return 'not installed (--install)' unless install
+      return "GUI launch probe failed: #{gui_failures.first[1]}" unless gui_failures.empty?
+      return nil if version_ok || gui_launched
+
+      'smoke inconclusive: no version output matched and no GUI launch ran 15s'
     end
 
     private
+
+    def settle_payload_removals
+      c = @c
+      removed = c.payload_pending
+      why = self.class.payload_verdict(install: c.install, version_ok: @version_ok,
+                                       gui_launched: @gui_launched, gui_failures: c.gui_failures.to_a)
+      if why
+        puts removed.first(20).join("\n")
+        puts "== smoke: #{c.smoke}"
+        raise Escalate.new("payload layout changed (#{removed.size} removed path(s) named nowhere, but #{why})",
+                           c.evidence.dir)
+      end
+      c.accept_payload = true
+      more = removed.size > 10 ? " (+#{removed.size - 10} more)" : ''
+      (c.accepted_diffs ||= []) << "payload removed paths accepted: #{removed.first(10).join(', ')}#{more}"
+      Log.log "payload: #{removed.size} removed path(s) accepted: named nowhere, installed clean, smoke ran the app"
+    end
 
     def ev(n) = @c.evidence.path(n)
     def neweb = File.basename(@c.new_ebuild)
@@ -267,10 +297,13 @@ module Autobump
       # flag before the real binary is reached
       (self.class.launchers(owned_files(c.pkg)) + bins(c.pkg)).uniq.each do |bin|
         %w[--version version -V].each do |vf|
-          out = c.sh(bin, vf, timeout: 20).first.lines.first(3).join
+          out, ok, = c.sh(bin, vf, timeout: 20)
+          out = out.lines.first(3).join
           next unless out.include?(c.newver)
           line = out.lines.find { |l| l.include?(c.newver) }.to_s.strip
           c.smoke = "#{vf} ok: #{File.basename(bin)}: #{line}"
+          # `app 2.0: fatal: template.dat missing` names the version but did not run the app
+          @version_ok = ok
           Log.ok "emerge + smoke: #{c.smoke}"
           return
         end
@@ -310,6 +343,7 @@ module Autobump
           #{perr.lines.last(20).join}
         OUT
         (c.gui_failures ||= []) << [bin, outcome] if launch_failed
+        @gui_launched = true if prc == 124 && !launch_failed
         res = outcome if launch_failed || !failed
         failed ||= launch_failed
         break if perr =~ GUI_MISSING_LIBRARY || GUI_STOP_STATUSES.include?(prc)
