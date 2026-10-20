@@ -313,6 +313,31 @@ left_rm, = F.call(%w[opt/app/extensions/git/dist/main.js], [], '1', '2')
 check 'a script outside an app resources tree stays structural', left_rm,
       %w[opt/app/extensions/git/dist/main.js]
 
+# cursor 3.25.9 -> 3.26.13 dropped a Windows script from an extension
+left_rm, = F.call(%W[#{app}/extensions/cursor-computer-use/scripts/verify-authenticode-invocation.ps1],
+                  [], '3.25.9', '3.26.13')
+check 'a dropped script of any extension in an app tree is churn', left_rm, []
+
+# deepseek-harness 0.2.0_rc2 -> 0.2.1_rc2 renamed hashed fonts and dropped experiment files
+nm = 'package/node_modules/@deepseek-ai'
+left_rm, left_ad, = F.call(
+  %W[#{nm}/dsh-web-frontend/dist/assets/fonts/KaTeX_Main-Bold-Jm3AIy58.woff
+     #{nm}/dsh-web-frontend/dist/assets/fonts/KaTeX_Main-Bold-waoOVXN0.ttf
+     #{nm}/dsh-experimental-schedule-bundle/cordis.patch.yml
+     #{nm}/dsh-skill-office/assets/scripts/check_office.py],
+  %W[#{nm}/dsh-experimental-inspector/lib/devtools/Images/nodeIcon.avif
+     #{nm}/dsh-experimental-inspector/lib/devtools/devtools_app.html],
+  '0.2.0_rc2', '0.2.1_rc2'
+)
+check 'fonts, data and scripts in node_modules are churn', [left_rm, left_ad], [[], []]
+
+left_rm, left_ad, = F.call(%W[#{app}/node_modules/.bin/esbuild #{app}/bin/helper.sh],
+                           %W[#{app}/node_modules/@img/sharp/lib/libvips.so.42], '1', '2')
+check 'extensionless files, launchers and versioned shared objects stay structural',
+      [left_rm, left_ad],
+      [%W[#{app}/node_modules/.bin/esbuild #{app}/bin/helper.sh],
+       %W[#{app}/node_modules/@img/sharp/lib/libvips.so.42]]
+
 puts '----'
 if $fail.zero?
   puts 'payload_diff: all passed'
