@@ -31,6 +31,7 @@ The op-registry deepening and richer GUI-package handling live in a sibling repo
 | 3 preflight | `preflight.rb`, `cleanup.rb` | clean-tree gate, sync master, branch, baseline pkgcheck |
 | 4 distfiles | `distfiles.rb` | write the new ebuild, fetch, regenerate Manifest |
 | 5 artifact diff | `artifact_diff.rb` | payload file-tree diff / source build-surface diff |
+| 5b toolchain | `toolchain.rb` | raise an explicit Go/Rust floor (`>=dev-lang/go-X`, `RUST_MIN_VER`) to the new source's; escalate when it needs a new atom or ::gentoo lacks the compiler |
 | 6 build test | `build_test.rb` | emerge with CI's elog config, gate, smoke, GUI probe, qa-vdb |
 | 7 finalize | `finalize.rb` | drop old ebuild (per-package `keep_old = N` keeps the N most-recent instead), pkgcheck delta, commit as the bot |
 | 8 PR | `pr.rb` | push, open a PR, cc maintainers, draft multi-arch bumps |
