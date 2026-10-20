@@ -2,7 +2,7 @@
 module Autobump
   # Dispatcher / full pipeline. Parses args, then runs the stages in order:
   #   locate -> classify -> [--check] -> preflight -> distfiles -> artifact_diff
-  #   -> [--diff-only] -> build_test -> finalize -> pr
+  #   -> [--diff-only] -> toolchain -> build_test -> finalize -> pr
   # Escalate = exit 3, Abort = exit 2, clean return = 0. cleanup runs on failure once
   # the branch exists (ctx.armed), disarmed after the commit.
   class CLI
@@ -74,7 +74,8 @@ module Autobump
       begin
         Preflight.new(ctx).run
         Distfiles.new(ctx).run
-        ArtifactDiff.new(ctx).run
+        ArtifactDiff.new(ctx).run # --diff-only stops here, before the toolchain floor check
+        Toolchain.new(ctx).run
         BuildTest.new(ctx).run
         Finalize.new(ctx).run
         PR.new(ctx).run
