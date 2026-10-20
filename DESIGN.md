@@ -30,16 +30,22 @@ The op-registry deepening and richer GUI-package handling live in a sibling repo
 | evidence pack | `evidence.rb` | the `exit 3` evidence directory |
 | 3 preflight | `preflight.rb`, `cleanup.rb` | clean-tree gate, sync master, branch, baseline pkgcheck |
 | 4 distfiles | `distfiles.rb` | write the new ebuild, fetch, regenerate Manifest |
-| 5 artifact diff | `artifact_diff.rb` | payload file-tree diff / source build-surface diff |
-| 5b toolchain | `toolchain.rb` | raise an explicit Go/Rust floor (`>=dev-lang/go-X`, `RUST_MIN_VER`) to the new source's; escalate when it needs a new atom or ::gentoo lacks the compiler |
-| 6 build test | `build_test.rb` | emerge with CI's elog config, gate, smoke, GUI probe, qa-vdb |
+| 5 artifact diff | `artifact_diff.rb` | payload file-tree diff (a removal nothing names waits for stage 6) / source build-surface diff (a Cargo feature the ebuild never names is ignored) |
+| 5b toolchain | `toolchain.rb` | raise an explicit Go/Rust floor (`>=dev-lang/go-X`, `RUST_MIN_VER`) to the new source's; note a missing atom on a draft PR; escalate when ::gentoo lacks the compiler or the atoms cannot be raised in place |
+| 6 build test | `build_test.rb` | emerge with CI's elog config, gate, smoke, GUI probe, qa-vdb; accept stage 5's pending removals only after a clean install and a smoke test that ran the app |
 | 7 finalize | `finalize.rb` | drop old ebuild (per-package `keep_old = N` keeps the N most-recent instead), pkgcheck delta, commit as the bot |
-| 8 PR | `pr.rb` | push, open a PR, cc maintainers, draft multi-arch bumps |
+| 8 PR | `pr.rb` | push, open a PR, cc maintainers, open a draft for the reasons below |
 
-`--check` stops after classify (no writes, no remotes); `--diff-only` after stage 5; `--install` runs
+`--check` stops after classify (no writes, no remotes); `--diff-only` after stage 5, so it skips the
+toolchain check and escalates any payload removal that needs the build to clear it; `--install` runs
 the build test and finalize (a local commit) but stops before push/PR; `--pr` runs all. With per-package
 `keep_old = N`, stage 7 keeps the N most-recent versions instead of dropping the replaced one (adds the
 new ebuild, drops anything older; `0` keeps all), and `pkgdev manifest` keeps the DIST of whatever remains.
+
+A PR opens as a draft when only amd64 was built (multi-arch keywords), when the GUI launch probe
+failed, or when a rule accepted a difference it would otherwise escalate on (`accepted_diffs`: a raised
+toolchain floor, a toolchain note, accepted payload removals). The body lists each accepted difference,
+and the engine prints `PR opened (draft: <reasons>)`, which the overlay's sweep copies into the issue.
 
 ## Classification signals (stage 2)
 
