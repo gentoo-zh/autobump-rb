@@ -357,31 +357,22 @@ module Autobump
     # Cargo feature names contain `-`, so unlike grep -w a `-` also continues a word: `cli` is
     # not named by the `${PN/-cli/}` of cc-switch-cli, nor `gui` by `guide`.
     FEATURE_CHAR = '[A-Za-z0-9_-]'
-    # a bash array whose name ends in `features`, such as `local myfeatures=( … )`
-    FEATURE_ARRAY = /features\+?=\((?<body>(?:[^()]|\(\g<body>\))*)\)/mi
 
     def self.names_word?(text, word)
       text.match?(/(?<!#{FEATURE_CHAR})#{Regexp.escape(word)}(?!#{FEATURE_CHAR})/)
     end
 
-    # `default` is also the phase helper most ebuilds call, so it counts only where the ebuild
-    # handles default features: --no-default-features, or `default` in a features list.
-    def self.names_default_features?(text)
-      return true if text.include?('default-features')
-
-      lists = text.each_line.grep(/features/i) + text.scan(FEATURE_ARRAY).flatten
-      lists.any? { |l| names_word?(l, 'default') }
-    end
-
     # The surface lines for Cargo features the ebuild never names. Cargo builds `default` plus
     # the features the ebuild passes (--features, myfeatures, usually behind a USE flag), so
-    # adding or removing any other one leaves the ebuild as it is.
+    # adding or removing any other one leaves the ebuild as it is. `default` itself always
+    # counts, because adding or dropping it changes what Cargo builds, and nothing is ignored
+    # under --all-features, which builds every feature.
     def self.ignored_cargo_features(lines, ebuild_text)
+      return [] if ebuild_text.include?('all-features')
+
       lines.select do |l|
         name = l[CARGO_FEATURE, 1] or next false
-        next !names_default_features?(ebuild_text) if name == 'default'
-
-        !names_word?(ebuild_text, name)
+        name != 'default' && !names_word?(ebuild_text, name)
       end
     end
 

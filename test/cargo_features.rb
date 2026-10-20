@@ -1,8 +1,9 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 # Test ArtifactDiff#source_surface on Cargo features: an added or removed feature counts only
-# when the ebuild names it. cc-switch-cli 5.11.1 (cli, default, test-hooks) and gitoxide 0.60.0
-# escalated on features neither ebuild selects. Every other surface line still counts.
+# when the ebuild names it. cc-switch-cli 5.11.1 (cli, test-hooks) and gitoxide 0.60.0 escalated
+# on features neither ebuild selects. `default`, every feature under --all-features, and every
+# other surface line still count.
 # Hermetic -- no portage. Run: ruby test/cargo_features.rb
 require 'stringio'
 require 'tmpdir'
@@ -67,8 +68,8 @@ PLAIN = <<~'EB'
 EB
 
 check 'unreferenced features added (cc-switch-cli 5.11.1)',
-      surface({ 'Cargo.toml' => toml }, { 'Cargo.toml' => toml('cli', 'default', 'test-hooks') }, PLAIN),
-      [false, "+cargo-feature:cli\n+cargo-feature:default\n+cargo-feature:test-hooks\n"]
+      surface({ 'Cargo.toml' => toml }, { 'Cargo.toml' => toml('cli', 'test-hooks') }, PLAIN),
+      [false, "+cargo-feature:cli\n+cargo-feature:test-hooks\n"]
 check 'unreferenced feature removed',
       surface({ 'Cargo.toml' => toml('vendored') }, { 'Cargo.toml' => toml }, PLAIN),
       [false, "-cargo-feature:vendored\n"]
@@ -102,18 +103,18 @@ check '`cli` is not named by `client`',
 check '`cli` as a whole word escalates',
       surface({ 'Cargo.toml' => toml }, { 'Cargo.toml' => toml('cli') }, "#{PLAIN}IUSE+=\" cli\"\n").first, true
 
-check '`default` under --no-default-features escalates',
-      surface({ 'Cargo.toml' => toml }, { 'Cargo.toml' => toml('default') },
-              "#{PLAIN}src_configure() { cargo_src_configure --no-default-features; }\n").first, true
-check '`default` in --features escalates',
-      surface({ 'Cargo.toml' => toml('default') }, { 'Cargo.toml' => toml },
-              "#{PLAIN}src_configure() { cargo_src_configure --features default,tls; }\n").first, true
-check '`default` in a multi-line myfeatures array escalates',
-      surface({ 'Cargo.toml' => toml }, { 'Cargo.toml' => toml('default') },
-              "#{PLAIN}src_configure() {\n\tlocal myfeatures=(\n\t\t$(usev gui)\n\t\tdefault\n\t)\n}\n").first, true
-check '`default` as the phase helper only is ignored',
-      surface({ 'Cargo.toml' => toml }, { 'Cargo.toml' => toml('default') }, PLAIN),
-      [false, "+cargo-feature:default\n"]
+check 'added `default` escalates even when only the phase helper names it',
+      surface({ 'Cargo.toml' => toml }, { 'Cargo.toml' => toml('cli', 'default') }, PLAIN),
+      [true, "+cargo-feature:cli\n"]
+check 'added `default` escalates in an ebuild that never names it',
+      surface({ 'Cargo.toml' => toml }, { 'Cargo.toml' => toml('default') }, "EAPI=8\ninherit cargo\n"),
+      [true, nil]
+check 'removed `default` escalates',
+      surface({ 'Cargo.toml' => toml('default') }, { 'Cargo.toml' => toml }, PLAIN), [true, nil]
+check 'unnamed feature under --all-features escalates',
+      surface({ 'Cargo.toml' => toml }, { 'Cargo.toml' => toml('extra') },
+              "#{PLAIN}src_configure() { cargo_src_configure --all-features; }\n"),
+      [true, nil]
 
 check 'non-Cargo surface line escalates beside an ignored feature',
       surface({ 'CMakeLists.txt' => "option(WITH_A \"a\" ON)\n", 'Cargo.toml' => toml },
