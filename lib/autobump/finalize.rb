@@ -140,28 +140,6 @@ module Autobump
       end.to_h
     end
 
-    # pkgcheck exits 1 when it reports an error-level finding and 2 when it fails itself, then
-    # prints "pkgcheck scan: error: ...". Output from a failed run is no evidence either way: 0.10.47
-    # and older stash the working tree around --commits, and on the runner the pop failed with
-    # "No stash entries found" after the findings were printed.
-    PKGCHECK_ERROR = /^pkgcheck(?: [a-z]+)?: error: .*$/
-    def self.pkgcheck_failure(scan_output, exitstatus)
-      return scan_output[PKGCHECK_ERROR] if scan_output.match?(PKGCHECK_ERROR)
-      return "pkgcheck exited #{exitstatus.inspect}" unless [0, 1].include?(exitstatus)
-
-      nil
-    end
-
-    # The URL findings worth a recheck: this package's, on fields the bump touched. Raises Abort
-    # when pkgcheck itself failed, so a broken scan defers instead of escalating or passing.
-    def self.url_records_to_recheck(scan_output, exitstatus, pkg, touched)
-      if (failure = pkgcheck_failure(scan_output, exitstatus))
-        raise Abort, "pkgcheck --net scan failed (#{failure}); deferring"
-      end
-
-      records_this_bump_touched(flagged_url_records(scan_output, pkg), touched)
-    end
-
     def self.flagged_urls(scan_output, pkg)
       flagged_url_records(scan_output, pkg).map(&:first).uniq
     end
@@ -195,15 +173,15 @@ module Autobump
     def dead_url_recheck
       c = @c; repo = c.cfg.repo
       net = Dir.chdir(repo) { `pkgcheck scan --commits --net 2>&1`.scrub }
-      status = $?.exitstatus
       c.evidence.write('pkgcheck-net.txt', net)
+      records = Finalize.flagged_url_records(net, c.pkg)
       old_path = "#{c.pkg}/#{File.basename(c.old_ebuild)}"
       old_text = `git -C #{repo.shellescape} show HEAD~1:#{old_path.shellescape} 2>/dev/null`
       changed = Finalize.fields_changed(old_text, File.read(c.new_ebuild), c.old_pv, c.newver)
       metadata = "#{c.pkg}/metadata.xml"
       metadata_same = system('git', '-C', repo, 'diff', '--quiet', 'HEAD~1', 'HEAD', '--', metadata)
       changed << 'metadata.xml' unless metadata_same
-      records = Finalize.url_records_to_recheck(net, status, c.pkg, changed)
+      records = Finalize.records_this_bump_touched(records, changed)
       urls = records.map(&:first).uniq
       return Log.log('pkgcheck URL findings are on fields this bump did not touch') if urls.empty?
 
