@@ -9,10 +9,12 @@ module Autobump
   class Classify
     Result = Struct.new(:escalations, :multiarch, :gui, :keywords_line, keyword_init: true)
 
-    def initialize(cfg:, pkg:, old_ebuild:, old_pv:, newver:, evidence:, rewrite_var: nil, bundles: nil)
+    def initialize(cfg:, pkg:, old_ebuild:, old_pv:, newver:, evidence:, rewrite_var: nil,
+                   static_pins: [], bundles: nil)
       @cfg, @pkg, @old_ebuild = cfg, pkg, old_ebuild
       @cat, @pn = pkg.split('/', 2)
       @old_pv, @newver, @ev, @rewrite_var, @bundles = old_pv, newver, evidence, rewrite_var, bundles
+      @static_pins = static_pins
       # tolerate non-UTF-8 bytes: scrub so a later regex/scan can't raise an uncaught
       # ArgumentError (invalid byte sequence) that would exit 1, off the 0/2/3 contract.
       @text = File.read(old_ebuild, encoding: 'UTF-8').scrub
@@ -123,10 +125,14 @@ module Autobump
       # a pin the rewrite spec updates every bump is not a stale pin: exclude that one
       # variable, and escalate only if some OTHER pin is left unhandled. A _TAG/_COMMIT
       # assignment derived from ${PV} is also not a pin: the copied ebuild resolves it to
-      # the target version itself.
+      # the target version itself. A variable the package lists with --static-pin (an icon
+      # fetched at a fixed commit) is meant to stay the same, so it is excluded by name too.
+      # Only the leading assignment is dropped, so a second pin on the same line still counts.
+      handled = [@rewrite_var, *@static_pins].compact.map { |v| Regexp.escape(v.to_s) }
+      lead = handled.empty? ? nil : /\A[[:space:]]*(?:#{handled.join('|')})=(?:"[^"]*"|'[^']*'|\S*)/
       pinned = @text.lines.map { |l| l.sub(/#.*/, '') }
+                    .map { |l| lead ? l.sub(lead, '') : l }
                     .select { |l| l =~ /_COMMIT=|_TAG=/ }
-                    .reject { |l| @rewrite_var && l =~ /\A[[:space:]]*#{Regexp.escape(@rewrite_var.to_s)}=/ }
                     .reject { |l| self.class.version_derived_source_pin?(l) }
       return nil if pinned.empty?
       return nil if @text.scan(%r{https://[^ "\r\n]+}).any? { |u| u =~ /(-deps|-vendor|-crates|node_modules)\.tar\./ }

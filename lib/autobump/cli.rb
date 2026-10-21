@@ -50,7 +50,8 @@ module Autobump
       res = begin
         Classify.new(cfg: cfg, pkg: pkg, old_ebuild: loc.old_ebuild,
                      old_pv: loc.old_pv, newver: newver, evidence: ev,
-                     rewrite_var: o[:rewrite_var], bundles: bundles).run
+                     rewrite_var: o[:rewrite_var], static_pins: o[:static_pins],
+                     bundles: bundles).run
       rescue Abort => e
         die e.message
       rescue => e # an unexpected classify error defers (exit 2), never exit 1 off the contract
@@ -104,7 +105,7 @@ module Autobump
       o = { check: false, install: false, pr: false, diff_only: false,
             accept_surface: false, accept_payload: false, keep_old: false,
             rewrite_var: nil, rewrite_url: nil, rewrite_regex: nil, bundle_status: nil,
-            pkg: nil, newver: nil, issue: nil }
+            static_pins: [], pkg: nil, newver: nil, issue: nil }
       args = argv.dup
       until args.empty?
         a = args.shift
@@ -121,6 +122,7 @@ module Autobump
         when '--rewrite-url' then o[:rewrite_url] = option_value(args, a)
         when '--rewrite-regex' then o[:rewrite_regex] = option_value(args, a)
         when '--bundle-status' then o[:bundle_status] = option_value(args, a)
+        when '--static-pin' then o[:static_pins] << option_value(args, a)
         when %r{/}
           die("two packages given: #{o[:pkg]} and #{a}") if o[:pkg]
           o[:pkg] = a                                                # bash */*
@@ -142,6 +144,9 @@ module Autobump
       # was never built, committed or opened
       die('--diff-only and --pr ask for different runs') if o[:diff_only] && o[:pr]
       validate_rewrite_spec(o)
+      o[:static_pins].each do |v|
+        die "--static-pin is not a shell variable: #{v}" unless v.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
+      end
       o
     end
 
