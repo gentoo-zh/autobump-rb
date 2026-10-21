@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-task default: %i[syntax sweep decisions pr_body pr_push heavy_dep cli_flags payload_diff payload_removals surface_root cargo_features toolchain rewrite gui_probe probe_hang gui_launchers build_dispatch fetch_failure sh_timeout distfiles_outcome bundle_status bundle_controller bundle_wait deps_artifact_url dynamic_source_pin preflight_guards version_compare url_recheck remote_pick gates]
+task default: %i[syntax sweep decisions pr_body pr_push heavy_dep cli_flags payload_diff payload_removals surface_root cargo_features toolchain rewrite gui_probe probe_hang gui_launchers build_dispatch fetch_failure sh_timeout distfiles_outcome bundle_status bundle_controller bundle_wait deps_artifact_url dynamic_source_pin static_pins preflight_guards version_compare url_recheck remote_pick gates]
 
 desc 'ruby -c on all sources'
 task :syntax do
@@ -154,4 +154,9 @@ end
 desc 'which source pins a version copy updates by itself (hermetic)'
 task :dynamic_source_pin do
   sh 'ruby test/dynamic_source_pin.rb'
+end
+
+desc 'which source pins a package names as static across versions (hermetic)'
+task :static_pins do
+  sh 'ruby test/static_pins.rb'
 end

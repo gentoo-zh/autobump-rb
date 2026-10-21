@@ -9,6 +9,10 @@
 每個套件可選的 `keep_old = N` 會在升級時保留最近 N 個版本(新增新版 ebuild、移除更舊的;`0` 表示全部
 保留),供刻意保留多個版本的套件使用。
 
+`--static-pin VAR`(可重複)指定一個不隨版本變化的 `_COMMIT`/`_TAG` 變數,例如固定 commit 的圖示,
+因為它不需要隨升級更新,所以不會被當作過時的 source pin 而 escalate。在 overlay 中對應
+`autobump_static_pins = ["VAR"]`。
+
 僅執行可證明安全的升級。需要判斷的情況(新依賴、大版本跳變、過時的 source pin、build 選項變化)均會
 escalate,不依據推測進行修改。機械路徑中不含 LLM。
 

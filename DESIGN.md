@@ -58,7 +58,9 @@ Each is a way a plain copy-and-refetch would ship something wrong, so it escalat
 - **not_newer** — target does not sort strictly newer. A downgrade still fetches/builds against the
   older source, so nothing downstream catches it.
 - **source_pin** — ebuild pins a `_COMMIT`/`_TAG` with no per-version vendor bundle; a version-only
-  copy keeps the stale pin while distfiles + emerge succeed against the old source.
+  copy keeps the stale pin while distfiles + emerge succeed against the old source. `--static-pin VAR`
+  (repeatable) excludes a pin that stays the same across versions, such as an icon fetched at a fixed
+  commit; a listed pin that does need a bump is then copied stale.
 - **applied_patches** — the ebuild applies `files/*.patch`; re-application needs a human.
 - **hackport_cabal** — a `haskell-cabal` ebuild: dep bounds / ghc floors / hackage revision come from
   the upstream `.cabal`, not the ebuild, so a version-only copy keeps stale bounds.

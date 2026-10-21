@@ -11,6 +11,10 @@ why the bump is not mechanically safe.
 anything older) and `--keep-old` keeps them all, for packages that intentionally retain several
 versions. In the overlay that comes from the package's `autobump = N` table entry.
 
+`--static-pin VAR` (repeatable) names a `_COMMIT`/`_TAG` variable that stays the same across
+versions, such as an icon fetched at a fixed commit, so it does not escalate as a stale source pin.
+In the overlay that comes from `autobump_static_pins = ["VAR"]`.
+
 It only does bumps it can prove safe. Anything needing judgement — a new dependency, a major-version
 jump, a stale source pin, a changed build surface — escalates instead of being patched from a guess.
 No LLM in the mechanical path.
