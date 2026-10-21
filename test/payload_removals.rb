@@ -7,6 +7,7 @@
 # Hermetic: the trees are temp directories, scanelf is a stub on PATH, nothing is emerged.
 # Run: ruby test/payload_removals.rb
 require 'fileutils'
+require 'open3'
 require 'tmpdir'
 require_relative '../lib/autobump'
 
@@ -148,8 +149,7 @@ check 'an icon with a longer name than Icon= does not match it',
       []
 check 'unread text files escalate everything',
       reasons(blockers(%w[opt/app/changelog.md], text_complete: false)),
-      [['(all)', "the new tree's text files were not all read (one reaches #{AD::TEXT_FILE_CAP} bytes " \
-                 "or all exceed #{AD::TEXT_TOTAL_CAP})"]]
+      [['(all)', "the new tree's text files were not all read (they exceed #{AD::TEXT_TOTAL_CAP} bytes in all)"]]
 
 # --- the build decides what is left ---------------------------------------------------------
 verdict = ->(**kw) { BT.payload_verdict(install: true, version_ok: false, gui_launched: false, gui_failures: [], **kw) }
@@ -304,11 +304,17 @@ Dir.mktmpdir('payload-removals-') do |tmp|
   check 'tree: a file files/ names escalates',
         run.call('files', { 'opt/app/changelog.md' => '' }, files_dir: { 'files/app-docs.patch' => "+see changelog.md\n" }),
         'payload layout changed (opt/app/changelog.md: files/app-docs.patch names it: +see changelog.md)'
+  # siyuan ships a 7 MB one-line mermaid icons.json and locale JSON over the per-file cap
   big = "{\"pad\": \"#{'x' * (300 * 1024)}\"}"
-  check 'tree: a retained config at or over the per-file cap escalates',
+  check 'tree: a retained config over the per-file cap is read, and naming nothing it lets the build decide',
         run.call('bigjson', { 'opt/app/changelog.md' => '' }, { 'opt/app/config.json' => big }),
-        "payload layout changed ((all): the new tree's text files were not all read " \
-        "(one reaches #{AD::TEXT_FILE_CAP} bytes or all exceed #{AD::TEXT_TOTAL_CAP}))"
+        %w[opt/app/changelog.md]
+  check 'tree: a retained config over the per-file cap naming the file escalates with the name alone',
+        run.call('bigname', { 'opt/app/chunk.1a2b.js' => '' }, { 'opt/app/config.json' => big.sub('pad', 'chunk.1a2b.js') }),
+        'payload layout changed (opt/app/chunk.1a2b.js: opt/app/config.json names it: chunk.1a2b.js)'
+  check 'tree: a removed executable beside a config over the per-file cap escalates',
+        run.call('bigexec', { 'opt/app/helper' => "#!/bin/sh\n" }, { 'opt/app/config.json' => big }),
+        'payload layout changed (opt/app/helper: executable in the old tree)'
   check 'tree: an executable over the per-file cap is a binary and is skipped',
         run.call('bigbin', { 'opt/app/changelog.md' => '' }, { 'opt/app/app' => "\x7fELF#{'x' * (300 * 1024)}" }),
         %w[opt/app/changelog.md]
@@ -316,6 +322,14 @@ Dir.mktmpdir('payload-removals-') do |tmp|
         run.call('colon', { 'usr/share/pixmaps/other.png' => '' },
                  { 'usr/share/applications/foo:bar.desktop' => "[Desktop Entry]\nIcon=other\n" }),
         'payload layout changed (usr/share/pixmaps/other.png: usr/share/applications/foo:bar.desktop names it: Icon=other)'
+
+  # the total cap still bounds the read, over-cap configs included
+  total = build.call('total', { 'a.json' => big, 'b.json' => big })
+  pats = File.join(tmp, 'total-patterns.txt')
+  File.write(pats, "chunk.1a2b.js\n")
+  _out, err, = Open3.capture3({ 'SUDO' => '' }, 'bash', '-c', AD::TEXT_HITS_SH, 'bash', total, pats,
+                              AD::TEXT_FILE_CAP.to_s, (big.bytesize + 1).to_s)
+  check 'tree: configs over the total cap are reported TRUNCATED', err, "TRUNCATED\n"
 
   # a grep that takes its sh wrapper down with a signal makes xargs exit 125, not 124
   killer = File.join(tmp, 'killer')
