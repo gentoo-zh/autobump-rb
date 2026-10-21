@@ -269,38 +269,43 @@ module Autobump
     ICON_FILE = /\.(?:png|svg|xpm|ico)\z/
     TEXT_FILE_CAP = 256 * 1024
     TEXT_TOTAL_CAP = 64 * 1024 * 1024
-    # the new tree's .desktop entries, scripts and small configs that mention a removed name;
-    # TRUNCATED on stderr when one of those configs reaches the per-file cap or they add up to
-    # more than the total cap. Executables at or over the per-file cap are skipped: they are
-    # binaries (Electron's main binary is ~170 MB), and a script is not that large. A grep that
-    # fails rather than finds nothing exits 255, so xargs stops with 124; with pipefail that,
-    # an awk failure, or a child killed by a signal (xargs 125) all fail the read.
+    # the new tree's .desktop entries, scripts and configs that mention a removed name;
+    # TRUNCATED on stderr when they add up to more than the total cap. A config at or over the
+    # per-file cap (siyuan's 7 MB one-line mermaid icons.json) is searched with grep -o, so a hit
+    # carries the removed name instead of the whole line. Executables at or over the per-file cap
+    # are skipped: they are binaries (Electron's main binary is ~170 MB), and a script is not
+    # that large. A grep that fails rather than finds nothing exits 255, so xargs stops with 124;
+    # with pipefail that, an awk failure, or a child killed by a signal (xargs 125) all fail the
+    # read.
     TEXT_HITS_SH = <<~'SH'
       set -o pipefail
+      pat=$2 fcap=$3 cap=$4
       list=$($SUDO find "$1" -type f \( \( -name '*.desktop' -o -name '*.sh' -o -name '*.json' \
           -o -name '*.ini' -o -name '*.conf' -o -name '*.yml' -o -name '*.yaml' -o -name '*.service' \) \
           -printf 't %s %p\n' -o -perm /111 -size -"$3"c -printf 'x %s %p\n' \)) || exit 2
-      printf '%s\n' "$list" \
-        | awk -v fcap="$3" -v cap="$4" 'stop || !NF { next }
-            { total += $2 }
-            ($1 == "t" && $2 >= fcap) || total > cap { print "TRUNCATED" > "/dev/stderr"; stop = 1; next }
-            { sub(/^[tx] [0-9]+ /, ""); printf "%s%c", $0, 0 }' \
-        | xargs -0 -r sh -c '"$@"; [ $? -le 1 ] || exit 255' sh $SUDO grep -IHnFZ -f "$2" --
+      pick() {
+        printf '%s\n' "$list" \
+          | awk -v big="$1" -v fcap="$fcap" -v cap="$cap" 'stop || !NF { next }
+              { total += $2 }
+              total > cap { if (!big) print "TRUNCATED" > "/dev/stderr"; stop = 1; next }
+              ($1 == "t" && $2 >= fcap) == big { sub(/^[tx] [0-9]+ /, ""); printf "%s%c", $0, 0 }'
+      }
+      hits() { xargs -0 -r sh -c '"$@"; [ $? -le 1 ] || exit 255' sh $SUDO grep -IHnFZ "$@" -f "$pat" --; }
+      pick 0 | hits && pick 1 | hits -o
     SH
 
     # Why each removal still needs a human; empty when the build may decide them all. Pure, so
     # test/payload_removals.rb can pin every condition. Returns [[path, reason], ...].
     #   old_exec       paths that were executable in the old tree
     #   refs           {name => text} of the new ebuild and every file under files/
-    #   text_hits      [[path, line]] from the new tree's .desktop entries, scripts and configs
-    #   text_complete  false when one of those configs reached TEXT_FILE_CAP or all exceeded
-    #                  TEXT_TOTAL_CAP, so not all were read
+    #   text_hits      [[path, line]] from the new tree's .desktop entries, scripts and configs;
+    #                  line is the matched name alone in a config over TEXT_FILE_CAP
+    #   text_complete  false when those configs exceeded TEXT_TOTAL_CAP in all, so not all were read
     #   needed         {path => [NEEDED entries]} of the new tree's ELF objects; nil if unknown
     def self.removal_blockers(removed, new_tree:, old_exec:, refs:, text_hits:, text_complete:, needed:)
       blockers = []
       unless text_complete
-        blockers << ['(all)', "the new tree's text files were not all read (one reaches #{TEXT_FILE_CAP} bytes " \
-                              "or all exceed #{TEXT_TOTAL_CAP})"]
+        blockers << ['(all)', "the new tree's text files were not all read (they exceed #{TEXT_TOTAL_CAP} bytes in all)"]
       end
       removed.each do |p|
         base = File.basename(p)
