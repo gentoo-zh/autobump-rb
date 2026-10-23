@@ -385,6 +385,21 @@ class AutobumpSweepTest(unittest.TestCase):
         self.assertIn("build line 299", body)
         self.assertNotIn("build line 0\n", body)
 
+    def test_escalation_comment_leaves_out_the_tree_listings(self):
+        (self.evidence / "tree-new.txt").write_text("usr/lib/libnew.so\nusr/share/listed-new\n")
+        (self.evidence / "tree-old.txt").write_text("usr/share/listed-old\n")
+        self.run_sweep("4", "--comment")
+
+        body = [
+            call[-1] for call in self.gh_calls() if call[:3] == ["issue", "comment", "4"]
+        ][-1]
+        # a whole-tree listing names no failure; the diff beside it says what changed
+        self.assertNotIn("tree-new.txt", body)
+        self.assertNotIn("tree-old.txt", body)
+        self.assertNotIn("listed-", body)
+        self.assertIn("tree-added.txt", body)
+        self.assertIn("usr/lib/libnew.so", body)
+
     def test_kept_evidence_can_be_uploaded_as_an_artifact(self):
         self.run_sweep("4", "--comment")
 
