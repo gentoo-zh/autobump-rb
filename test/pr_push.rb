@@ -50,7 +50,7 @@ Dir.mktmpdir('autobump-pr-') do |dir|
   File.chmod(0o755, *Dir[File.join(bin, '*')])
   ENV['PATH'] = "#{bin}:#{ENV.fetch('PATH')}"
 
-  run = lambda do |fails, error = '', gui_failures: nil, accepted_diffs: nil|
+  run = lambda do |fails, error = '', gui_failures: nil, accepted_diffs: nil, info_notes: nil|
     [pushes, creates].each { |f| FileUtils.rm_f(f) }
     ENV['FAKE_PUSH_FAILS'] = fails.to_s
     ENV['FAKE_PUSH_ERROR'] = error
@@ -58,7 +58,7 @@ Dir.mktmpdir('autobump-pr-') do |dir|
     c = Autobump::Context.new(cfg: cfg, pkg: 'app-misc/fixture', pr: true, branch: 'app-misc-fixture-1.2.3',
                               old_pvr: '1.2.2', newver: '1.2.3', smoke: 'installed',
                               evidence: Autobump::Evidence.new('fixture'), gui_failures: gui_failures,
-                              accepted_diffs: accepted_diffs)
+                              accepted_diffs: accepted_diffs, info_notes: info_notes)
     stage = Stage.new(c)
     out = $stdout
     $stdout = StringIO.new
@@ -116,6 +116,14 @@ Dir.mktmpdir('autobump-pr-') do |dir|
   r = run.call(0, accepted_diffs: [])
   check 'an empty list does not', r[:creates].map { |l| l.include?('--draft') }, [false]
   check 'nor lists anything', r[:body].include?('accepted these differences'), false
+
+  r = run.call(0, info_notes: ['go floor raised: 1.27.0 -> 1.27.3 (go.mod: go 1.27.3)'])
+  check 'an informational note does not open a draft', r[:creates].map { |l| l.include?('--draft') }, [false]
+  check 'but the body carries it',
+        r[:body].include?("- go floor raised: 1.27.0 -> 1.27.3 (go.mod: go 1.27.3)\n"), true
+  r = run.call(0, accepted_diffs: ['toolchain floor not checked: the new source could not be unpacked here'],
+                  info_notes: ['go floor raised: 1.27.0 -> 1.27.3 (go.mod: go 1.27.3)'])
+  check 'a note beside an accepted difference still opens a draft', r[:creates].map { |l| l.include?('--draft') }, [true]
 end
 
 puts '----'
