@@ -147,6 +147,7 @@ module Autobump
       lines += diff_lines
       lines += gui_failure_lines
       lines += accepted_lines
+      lines += info_lines
       meta = []
       meta << "Closes ##{c.issue}" if c.issue
       ccs = maintainer_ccs
@@ -170,6 +171,15 @@ module Autobump
 
       ['', 'Warning: autobump accepted these differences, so this PR is a draft — review them before merging',
        *accepted.map { |d| "- #{d}" }]
+    end
+
+    # What autobump changed or saw and the build already vouches for: information for the
+    # reviewer, never a reason to open a draft
+    def info_lines
+      notes = @c.info_notes.to_a
+      return [] if notes.empty?
+
+      ['', 'Notes (information only, not a draft reason):', *notes.map { |n| "- #{n}" }]
     end
 
     # A rewritten variable is an opaque token a reviewer cannot check by eye, so the PR

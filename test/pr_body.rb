@@ -183,6 +183,21 @@ check_eq 'no accepted differences -> the body is unchanged', render(plain_ctx.ca
          "- diff vs 0.1.8: no build-option surface changes\n\nCloses #11090 · cc @vimimg\n"
 check_eq 'an empty list renders like an unset one', render(plain_ctx.call(accepted_diffs: [])), render(plain_ctx.call)
 
+# L. an informational note is listed without the draft wording, after any accepted difference
+check 'informational notes are listed without a draft warning',
+      render(plain_ctx.call(info_notes: ['go floor raised: 1.27.0 -> 1.27.3 (go.mod: go 1.27.3)'])),
+      must: ["\nNotes (information only, not a draft reason):\n" \
+             "- go floor raised: 1.27.0 -> 1.27.3 (go.mod: go 1.27.3)\n"],
+      absent: ['Warning', 'draft —']
+check 'a note and an accepted difference each keep their own heading',
+      render(plain_ctx.call(accepted_diffs: ['payload removed paths accepted: opt/b/app.jar'],
+                            info_notes: ['payload removed paths accepted (data files only): opt/b/a.png'])),
+      must: ["so this PR is a draft — review them before merging\n" \
+             "- payload removed paths accepted: opt/b/app.jar\n\n" \
+             "Notes (information only, not a draft reason):\n" \
+             "- payload removed paths accepted (data files only): opt/b/a.png\n"]
+check_eq 'an empty note list renders like an unset one', render(plain_ctx.call(info_notes: [])), render(plain_ctx.call)
+
 # the open-PR guard: a blip must not cost a bump that is already built, and a refusal must
 # say what gh said
 stub = File.join(Dir.mktmpdir('autobump-gh-'), 'gh')

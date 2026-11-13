@@ -46,6 +46,8 @@ A PR opens as a draft when only amd64 was built (multi-arch keywords), when the 
 failed, or when a rule accepted a difference it would otherwise escalate on (`accepted_diffs`: a raised
 toolchain floor, a toolchain note, accepted payload removals). The body lists each accepted difference,
 and the engine prints `PR opened (draft: <reasons>)`, which the overlay's sweep copies into the issue.
+What the build already vouches for goes to `info_notes` instead: the body lists it under its own
+heading, and it never makes the PR a draft.
 
 ## Classification signals (stage 2)
 
