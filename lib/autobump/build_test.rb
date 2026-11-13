@@ -200,14 +200,25 @@ module Autobump
     # .desktop entries run. A payload under /opt also ships node_modules/.bin, resources/ and
     # helper scripts; launching those runs installers and build scripts, not the app.
     def self.launchers(files)
+      (files.grep(ON_PATH) + desktop_programs(files)).uniq
+    end
+
+    # What the GUI probe starts. A package with .desktop entries is started the way the menu
+    # starts it, so v2rayA's daemon and its xray core, on PATH beside an entry that opens a
+    # browser, are not launched as windows; one without entries falls back to its PATH files.
+    def self.gui_targets(files)
+      files.grep(DESKTOP_ENTRY).empty? ? launchers(files) : desktop_programs(files)
+    end
+
+    # the package's own files its .desktop entries run
+    def self.desktop_programs(files)
       owned = files.to_set
       execs = files.grep(DESKTOP_ENTRY).filter_map { |entry| desktop_exec(File.read(entry)) rescue nil }
-      paths = execs.map do |cmd|
+      execs.filter_map do |cmd|
         next cmd if cmd.start_with?('/')
 
         ENV.fetch('PATH', '').split(':').map { |dir| File.join(dir, cmd) }.find { |f| owned.include?(f) }
-      end
-      (files.grep(ON_PATH) + paths.select { |f| owned.include?(f) }).uniq
+      end.select { |f| owned.include?(f) }.uniq
     end
 
     # the program an entry's Exec= runs, past an `env VAR=value` prefix
@@ -369,7 +380,7 @@ module Autobump
       res = 'no GUI binaries found'
       failed = false
       details = []
-      self.class.launchers(owned_files(c.pkg)).each do |bin|
+      self.class.gui_targets(owned_files(c.pkg)).each do |bin|
         fallback_ran = false
         perr, prc = gui_launch(bin)
         if perr.include?('no-sandbox')

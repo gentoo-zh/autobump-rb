@@ -59,6 +59,14 @@ Dir.mktmpdir('autobump-launchers-') do |dir|
   check 'launchers are what is on PATH and what the package\'s own .desktop entries run',
         L.call(files), ['/usr/bin/app', '/usr/sbin/appd', '/opt/bin/app-cli', app]
 
+  G = Autobump::BuildTest.method(:gui_targets)
+  check 'the GUI probe starts only what the .desktop entries run',
+        G.call(files), [app]
+  check 'a package without .desktop entries is probed through its PATH files',
+        G.call(files - [desktop, stray]), ['/usr/bin/app', '/usr/sbin/appd', '/opt/bin/app-cli']
+  check 'an entry that opens a browser leaves nothing to probe (v2rayA)',
+        G.call(['/usr/bin/v2raya', '/usr/bin/v2raya_core', stray]), []
+
   last = nil
   probe = lambda do |body|
     File.write(app, "#!/bin/sh\n#{body}\n")
