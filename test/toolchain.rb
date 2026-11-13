@@ -43,16 +43,17 @@ class MemoryEvidence
   def dir = '/evidence'
 end
 
-Ctx = Struct.new(:payload, :new_ebuild, :evidence, :bundles, :accepted_diffs, keyword_init: true)
+Ctx = Struct.new(:payload, :new_ebuild, :evidence, :bundles, :accepted_diffs, :info_notes, keyword_init: true)
 
 # The new source tree is a hash of paths under /w; S is /w/src.
 class StubToolchain < Autobump::Toolchain
   attr_reader :reads
 
-  def initialize(ctx, tree, unpacked: true)
+  def initialize(ctx, tree, unpacked: true, listed: true)
     super(ctx)
     @tree = tree
     @unpacked = unpacked
+    @listed = listed
     @reads = []
   end
 
@@ -61,26 +62,27 @@ class StubToolchain < Autobump::Toolchain
   def new_workdir = @unpacked ? '/w' : nil
   def cargo_members(root) = @tree.keys.select { |k| k.start_with?("#{root}/") && k.end_with?('/Cargo.toml') && !k.include?('/vendor/') }
   def source_dir(_work) = '/w/src'
+  def find_files(root, name) = @listed ? @tree.keys.select { |k| k.start_with?("#{root}/") && File.basename(k) == name } : nil
   def read(path) = (@reads << path; @tree[path])
   def gentoo_eclass(name) = { 'go-module' => GO_MODULE_ECLASS, 'rust' => RUST_ECLASS }[name]
   def best_visible(atom) = BEST[atom]
 end
 
-# [ebuild text after the stage, accepted differences, escalation message or nil, stub]
-def run_stage(ebuild, tree = nil, payload: false, bundles: nil, unpacked: true, **files)
+# [ebuild text after the stage, accepted differences, escalation message or nil, stub, info notes]
+def run_stage(ebuild, tree = nil, payload: false, bundles: nil, unpacked: true, listed: true, **files)
   tree ||= files # a hash written without braces arrives as keywords
   Dir.mktmpdir('autobump-toolchain-test-') do |dir|
     path = File.join(dir, 'pkg-2.0.ebuild')
     File.write(path, ebuild)
     ctx = Ctx.new(payload: payload, new_ebuild: path, evidence: MemoryEvidence.new, bundles: bundles)
-    stage = StubToolchain.new(ctx, tree, unpacked: unpacked)
+    stage = StubToolchain.new(ctx, tree, unpacked: unpacked, listed: listed)
     escalation = begin
       stage.run
       nil
     rescue Autobump::Escalate => e
       e.message
     end
-    [File.read(path), ctx.accepted_diffs, escalation, stage]
+    [File.read(path), ctx.accepted_diffs, escalation, stage, ctx.info_notes]
   end
 end
 
@@ -88,12 +90,18 @@ def go_ebuild(dep) = "EAPI=8\ninherit go-module\n\nBDEPEND=\"#{dep}\"\n"
 
 # --- go ----------------------------------------------------------------------------------
 # net-proxy/queqiao: the manual bump that this stage replaces changed 1.25.13 to 1.26.9
-text, notes, esc, = run_stage(go_ebuild('>=dev-lang/go-1.25.13'),
-                              '/w/src/go.mod' => "module example.com/q\n\ngo 1.26.9\n")
+text, notes, esc, _, info = run_stage(go_ebuild('>=dev-lang/go-1.25.13'),
+                                      '/w/src/go.mod' => "module example.com/q\n\ngo 1.26.9\n")
 check 'go: a higher go.mod floor raises the explicit atom', text, go_ebuild('>=dev-lang/go-1.26.9')
-check 'go: the raise is recorded as an accepted difference', notes,
-      ['go floor raised: 1.25.13 -> 1.26.9 (go.mod: go 1.26.9)']
+# the rewrite is reached only after go_plan escalated a floor above the best dev-lang/go
+# (toolchain.rb, `best.nil? || compare(required, best) > 0`), and the build then runs against
+# the raised atom, so the note informs and does not draft
+check 'go: the raise is an informational note, not an accepted difference', [notes, info],
+      [nil, ['go floor raised: 1.25.13 -> 1.26.9 (go.mod: go 1.26.9)']]
 check 'go: a raise does not escalate', esc, nil
+check 'go: the raise plan is marked informational',
+      T.go_plan(go_ebuild('>=dev-lang/go-1.25.13'), required: '1.26.9', line: 'go 1.26.9',
+                eclass_floor: '1.24.11', best: '1.27.2').info, true
 
 text, notes, esc, = run_stage(go_ebuild('>=dev-lang/go-1.25.13'), '/w/src/go.mod' => "go 1.25.13\n")
 check 'go: an equal floor leaves the ebuild alone', [text, notes, esc], [go_ebuild('>=dev-lang/go-1.25.13'), nil, nil]
@@ -121,14 +129,16 @@ check 'go: the note asks for the atom and quotes go.mod and the eclass floor', n
       ['go.mod requires go 1.26.0 (go 1.26.0), above the go-module.eclass floor 1.24.11, and the ebuild ' \
        'has no >=dev-lang/go atom; add >=dev-lang/go-1.26.0:= to BDEPEND']
 check 'go: no atom is added', text, "EAPI=8\ninherit go-module\n"
+check 'go: a missing atom still drafts', run_stage("EAPI=8\ninherit go-module\n", '/w/src/go.mod' => "go 1.26.0\n")[4], nil
 _, _, esc, = run_stage("EAPI=8\ninherit go-module\n", '/w/src/go.mod' => "go 1.28.0\n")
 check 'go: no atom and a floor above the best dev-lang/go still escalates', esc&.include?('(1.27.2)'), true
 _, notes, esc, = run_stage("EAPI=8\ninherit go-module\n", '/w/src/go.mod' => "go 1.24.0\n")
 check 'go: no atom and a floor under the eclass passes', [notes, esc], [nil, nil]
 
-text, _, esc, = run_stage(go_ebuild('>=dev-lang/go-1.26.9'), '/w/src/go.mod' => "go 1.28.0\n")
+text, notes, esc, _, info = run_stage(go_ebuild('>=dev-lang/go-1.26.9'), '/w/src/go.mod' => "go 1.28.0\n")
 check 'go: a floor above the best dev-lang/go escalates', esc&.include?('best dev-lang/go in ::gentoo (1.27.2)'), true
 check 'go: an unbuildable floor is not written', text, go_ebuild('>=dev-lang/go-1.26.9')
+check 'go: nor noted', [notes, info], [nil, nil]
 _, _, esc, = run_stage(go_ebuild('>=dev-lang/go-1.26.9'), '/w/src/go.mod' => "go 1.28rc1\n")
 check 'go: a release candidate compares as _rc', esc&.include?('needs Go 1.28.0_rc1'), true
 
@@ -142,10 +152,11 @@ two = "EAPI=8\ninherit go-module\nBDEPEND=\">=dev-lang/go-1.25.13\"\nfoo? ( >=de
 text, _, esc, = run_stage(two, '/w/src/go.mod' => "go 1.26.9\n")
 check 'go: two >= atoms escalate rather than guess', [text, esc&.include?('not one >=dev-lang/go atom')], [two, true]
 
-text, notes, esc, = run_stage(go_ebuild('>=dev-lang/go-1.25.13'), { '/w/src/go.mod' => "go 1.26.9\n" },
-                              bundles: Object.new)
+text, notes, esc, _, info = run_stage(go_ebuild('>=dev-lang/go-1.25.13'), { '/w/src/go.mod' => "go 1.26.9\n" },
+                                      bundles: Object.new)
 check 'go: a regenerated vendor bundle notes instead of rewriting',
       [text, esc, notes.to_a.first&.include?('vendor bundle')], [go_ebuild('>=dev-lang/go-1.25.13'), nil, true]
+check 'go: and that note still drafts', info, nil
 _, _, esc, = run_stage(go_ebuild('>=dev-lang/go-1.25.13'), { '/w/src/go.mod' => "go 1.28.0\n" },
                        bundles: Object.new)
 check 'go: a regenerated vendor bundle above the best dev-lang/go escalates', esc&.include?('(1.27.2)'), true
@@ -192,14 +203,39 @@ text, notes, esc, = run_stage(go_ebuild('>=dev-lang/go-1.25.13'), { '/w/src/go.m
 check 'an unpackable new tree leaves a note and the ebuild alone', [text, notes, esc],
       [go_ebuild('>=dev-lang/go-1.25.13'), ['toolchain floor not checked: the new source could not be unpacked here'], nil]
 
+# another module under S may be the one the ebuild builds: a raise based on the nearest go.mod
+# drafts when one states a different floor (v2rayA ships service/ and core/ modules)
+multi = { '/w/src/go.mod' => "go 1.26.9\n", '/w/src/core/go.mod' => "go 1.27.1\n" }
+text, notes, esc, _, info = run_stage(go_ebuild('>=dev-lang/go-1.25.13'), multi)
+check 'go: two modules with different floors still raise from the nearest', [text, esc],
+      [go_ebuild('>=dev-lang/go-1.26.9'), nil]
+check 'go: and the raise drafts, naming the other module', [notes, info],
+      [['go floor raised: 1.25.13 -> 1.26.9 (go.mod: go 1.26.9); other go.mod files under S state core/go.mod: go 1.27.1'],
+       nil]
+same = { '/w/src/go.mod' => "go 1.26.9\n", '/w/src/core/go.mod' => "module c\n\ngo 1.26.9\n" }
+_, notes, _, _, info = run_stage(go_ebuild('>=dev-lang/go-1.25.13'), same)
+check 'go: modules that agree only inform', [notes, info&.size], [nil, 1]
+skipped = { '/w/src/go.mod' => "go 1.26.9\n", '/w/src/testdata/x/go.mod' => "go 1.18\n",
+            '/w/src/vendor/a/go.mod' => "go 1.20\n", '/w/src/go-mod/b/go.mod' => "go 1.21\n",
+            '/w/src/web/node_modules/c/go.mod' => "go 1.22\n" }
+_, notes, _, _, info = run_stage(go_ebuild('>=dev-lang/go-1.25.13'), skipped)
+check 'go: testdata, vendor, the module cache and node_modules are not modules S builds', [notes, info&.size], [nil, 1]
+_, notes, _, _, info = run_stage(go_ebuild('>=dev-lang/go-1.25.13'),
+                                 { '/w/src/go.mod' => "go 1.26.9\n", '/w/src/tool/go.mod' => "module t\n" })
+check 'go: a module without a go line drafts', [notes.to_a.first&.end_with?('tool/go.mod: no go line'), info], [true, nil]
+_, notes, _, _, info = run_stage(go_ebuild('>=dev-lang/go-1.25.13'), { '/w/src/go.mod' => "go 1.26.9\n" },
+                                 listed: false)
+check 'go: a listing that failed drafts', [notes.to_a.first&.include?('could not be listed'), info], [true, nil]
+
 # --- rust --------------------------------------------------------------------------------
 def rust_ebuild(min) = "EAPI=8\n\n#{min}\ninherit cargo\n"
 
-text, notes, esc, = run_stage(rust_ebuild('RUST_MIN_VER="1.85.0"'),
-                              '/w/src/Cargo.toml' => "[package]\nname = \"x\"\nrust-version = \"1.88\"\n")
+text, notes, esc, _, info = run_stage(rust_ebuild('RUST_MIN_VER="1.85.0"'),
+                                      '/w/src/Cargo.toml' => "[package]\nname = \"x\"\nrust-version = \"1.88\"\n")
 check 'rust: a higher rust-version raises RUST_MIN_VER', [text, esc], [rust_ebuild('RUST_MIN_VER="1.88.0"'), nil]
 check 'rust: the raise is recorded as an accepted difference', notes,
       ['rust floor raised: RUST_MIN_VER 1.85.0 -> 1.88.0 (Cargo.toml: rust-version = "1.88")']
+check 'rust: and is no informational note', info, nil
 
 text, notes, = run_stage(rust_ebuild('RUST_MIN_VER="1.88.0"'),
                          '/w/src/Cargo.toml' => "[package]\nrust-version = \"1.88\"\n")
@@ -282,10 +318,12 @@ check 'toml: [[bin]] ends the [package] section',
 
 # --- both, and what is skipped -----------------------------------------------------------
 both = "EAPI=8\nRUST_MIN_VER=\"1.85.0\"\ninherit cargo go-module\nBDEPEND=\">=dev-lang/go-1.25.13\"\n"
-text, notes, = run_stage(both, '/w/src/go.mod' => "go 1.26.9\n",
-                               '/w/src/Cargo.toml' => "[package]\nrust-version = \"1.88\"\n")
+text, notes, _, _, info = run_stage(both, '/w/src/go.mod' => "go 1.26.9\n",
+                                         '/w/src/Cargo.toml' => "[package]\nrust-version = \"1.88\"\n")
 check 'both floors are raised in one pass', text, both.sub('1.25.13', '1.26.9').sub('1.85.0', '1.88.0')
-check 'both raises are recorded', notes&.size, 2
+check 'both raises are recorded: rust drafts, go informs', [notes, info],
+      [['rust floor raised: RUST_MIN_VER 1.85.0 -> 1.88.0 (Cargo.toml: rust-version = "1.88")'],
+       ['go floor raised: 1.25.13 -> 1.26.9 (go.mod: go 1.26.9)']]
 
 text, notes, esc, stage = run_stage(go_ebuild('>=dev-lang/go-1.25.13'),
                                     { '/w/src/go.mod' => "go 1.26.9\n" }, payload: true)

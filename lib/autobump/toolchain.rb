@@ -7,11 +7,15 @@ module Autobump
   # escalate when the atom cannot be rewritten safely or ::gentoo has no compiler new enough.
   # A floor the ebuild does not state (no atom, no RUST_MIN_VER) or a bump whose vendor bundle
   # is regenerated is not edited: the bump builds as before, and a note in accepted_diffs makes
-  # the PR a draft so a human adds the dependency. Only ever raises; never adds an upper bound,
+  # the PR a draft so a human adds the dependency. A raised Go atom only goes to info_notes:
+  # go_plan escalates a floor no visible dev-lang/go meets before it rewrites, and the build runs
+  # against the raised atom; it still drafts when another go.mod under S states another floor. A
+  # raised RUST_MIN_VER still drafts. Only ever raises; never adds an upper bound,
   # never touches RUST_MAX_VER. Runs after the artifact diff unpacked the new tree, before the build test, so
   # the build uses the rewritten ebuild.
   class Toolchain
-    Plan = Struct.new(:action, :text, :note, :reason, keyword_init: true) do
+    # info: the note is information for the PR body, not a reason to draft it
+    Plan = Struct.new(:action, :text, :note, :reason, :info, keyword_init: true) do
       def self.none = new(action: :none)
       def self.escalate(reason) = new(action: :escalate, reason: reason)
       # left for a human on the draft PR: the bump builds, but the ebuild states too low a floor
@@ -119,7 +123,7 @@ module Autobump
       end
       lines = text.lines
       lines[i] = lines[i][0...m.begin(:ver)] + required + lines[i][m.end(:ver)..]
-      Plan.new(action: :rewrite, text: lines.join,
+      Plan.new(action: :rewrite, text: lines.join, info: true,
                note: "go floor raised: #{m[:ver]} -> #{required} (go.mod: #{line})")
     end
 
@@ -212,6 +216,14 @@ module Autobump
                 'rust-version could not be read, so check which member the ebuild builds')
     end
 
+    # Directories whose go.mod is no module the package builds: go ignores testdata, and vendor,
+    # go-mod (the eclass's module cache) and node_modules hold other projects' files.
+    GO_MOD_SKIP = %w[testdata vendor go-mod node_modules].freeze
+
+    def self.module_go_mods(paths, root)
+      paths.reject { |p| p.delete_prefix("#{root}/").split('/')[0...-1].any? { |d| GO_MOD_SKIP.include?(d) } }
+    end
+
     def self.eclass_go_floor(eclass) = eclass.to_s[/^[ \t]*BDEPEND=">=dev-lang\/go-(\d[\d.]*)/, 1]
 
     def self.eclass_rust_default(eclass)
@@ -256,9 +268,8 @@ module Autobump
         return
       end
       File.write(c.new_ebuild, changed.last.text, encoding: 'UTF-8') unless changed.empty?
-      c.accepted_diffs ||= []
       noted.each do |p|
-        c.accepted_diffs << p.note
+        (p.info ? (c.info_notes ||= []) : (c.accepted_diffs ||= [])) << p.note
         Log.log p.note
       end
       c.evidence.write('toolchain.txt', noted.map(&:note).join("\n") + "\n")
@@ -271,10 +282,34 @@ module Autobump
       line, required = self.class.go_directive(gomod)
       return nil unless line
       return Plan.escalate("go.mod has a go directive this engine cannot read: #{line}") unless required
-      self.class.go_plan(text, required: required, line: line,
-                               eclass_floor: self.class.eclass_go_floor(gentoo_eclass('go-module')) || abort_tree('go-module.eclass floor'),
-                               best: best_visible('dev-lang/go') || abort_tree('a visible dev-lang/go'),
-                               rewrite: !@c.bundles)
+      plan = self.class.go_plan(text, required: required, line: line,
+                                      eclass_floor: self.class.eclass_go_floor(gentoo_eclass('go-module')) || abort_tree('go-module.eclass floor'),
+                                      best: best_visible('dev-lang/go') || abort_tree('a visible dev-lang/go'),
+                                      rewrite: !@c.bundles)
+      # the nearest go.mod picked the floor; a module under S that states another one may be the
+      # one the ebuild builds, so a human checks which
+      if plan.info && !(others = other_go_lines(s, required)).empty?
+        plan.info = false
+        plan.note += "; other go.mod files under S state #{others.join(', ')}"
+      end
+      plan
+    end
+
+    # The go lines of S's other modules that differ from the required floor; one that cannot be
+    # read differs too, and so does a listing that failed.
+    def other_go_lines(s, required)
+      paths = find_files(s, 'go.mod') or return ['(the go.mod files could not be listed)']
+      self.class.module_go_mods(paths, s).filter_map do |path|
+        line, ver = self.class.go_directive(read(path))
+        next if ver && self.class.compare(ver, required).zero?
+
+        "#{path.delete_prefix("#{s}/")}: #{line || 'no go line'}"
+      end
+    end
+
+    def find_files(root, name)
+      out, ok = @c.sh('find', root, '-name', name, '-type', 'f', sudo: true)
+      ok ? out.lines.map(&:chomp).reject(&:empty?) : nil
     end
 
     def rust_check(text, work, s)
