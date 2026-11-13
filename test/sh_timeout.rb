@@ -4,6 +4,7 @@
 # `timeout` alone only kills the process it supervises, so an emerge that overran kept building
 # as root while cleanup restored the checkout underneath it.
 # Hermetic. Run: ruby test/sh_timeout.rb
+require 'rbconfig'
 require 'tmpdir'
 require_relative '../lib/autobump'
 
@@ -84,8 +85,9 @@ Process.wait(zombie)
 
 Dir.mktmpdir('autobump-sh-') do |dir|
   odd = File.join(dir, 'a) b (c')
-  File.symlink(File.realpath('/bin/sleep'), odd)
-  live = Process.spawn([odd, 'sleep'], '30', pgroup: true)
+  # Ruby, not /bin/sleep: uutils coreutils is one multicall binary that refuses an unknown argv[0].
+  File.symlink(RbConfig.ruby, odd)
+  live = Process.spawn([odd, 'ruby'], '-e', 'sleep 30', pgroup: true)
   sleep 0.05 until File.exist?("/proc/#{live}/stat") && File.read("/proc/#{live}/stat").include?('a) b (c')
   check 'a live member keeps its group alive, whatever its name', ctx.group_alive?(live), true
   Process.kill('KILL', live)
