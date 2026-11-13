@@ -378,17 +378,27 @@ module Autobump
     end
 
     def session_bus?
-      @session_bus = !`command -v dbus-run-session 2>/dev/null`.strip.empty? if @session_bus.nil?
+      if @session_bus.nil?
+        @session_bus = !`command -v dbus-run-session 2>/dev/null`.strip.empty?
+        Log.log 'GUI launch probe: dbus-run-session not found; launching without a session bus' unless @session_bus
+      end
       @session_bus
     end
 
     def create_probe_user
-      nul = File::NULL
-      system('useradd', '-m', '-s', '/bin/sh', PROBE_USER, out: nul, err: nul)
       Etc.getpwnam(PROBE_USER).dir
     rescue ArgumentError
-      Log.log "GUI launch probe: could not create #{PROBE_USER}; launching as root"
-      nil
+      out = begin
+        IO.popen(['useradd', '-m', '-s', '/bin/sh', PROBE_USER], err: %i[child out], &:read).to_s.strip
+      rescue SystemCallError => e
+        e.message
+      end
+      begin
+        Etc.getpwnam(PROBE_USER).dir
+      rescue ArgumentError
+        Log.log "GUI launch probe: useradd #{PROBE_USER} failed (#{out}); launching as root"
+        nil
+      end
     end
 
     # stderr only, stdout dropped; returns [stderr, exit status]
