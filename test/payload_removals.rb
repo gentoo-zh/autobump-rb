@@ -147,6 +147,81 @@ check 'a removed Icon= target of a retained desktop entry escalates',
 check 'an icon with a longer name than Icon= does not match it',
       blockers(%w[usr/share/pixmaps/app-old.png], text_hits: [['usr/share/applications/app.desktop', 'Icon=app']]),
       []
+# --- upstream text that names another file with the same ending ----------------------------
+# A removal is named by an upstream line only where the name starts and, when a directory is
+# written in front of it, that directory is the removed file's own.
+start = 'app-1.0/lib/start.py'
+{
+  'the same directory behind a variable' => 'CLASS_PATH="$CLASS_PATH:$IDE_HOME/lib/start.py"',
+  'a bare name' => 'exec python3 start.py "$@"',
+  'a name at the start of the line' => 'start.py --help',
+  './' => 'exec python3 ./start.py',
+  '../' => 'exec python3 ../start.py',
+  'a variable directory' => 'exec python3 $LIB/start.py',
+  'a braced variable directory' => 'exec python3 ${LIB}/start.py',
+  'a quoted variable directory' => 'exec python3 "$LIB"/start.py',
+  'a `:` in front' => 'PYTHONSTARTUP=lib:start.py',
+  'a longer name after it' => 'exec python3 /opt/app/lib/start.pyc'
+}.each do |what, line|
+  check "an upstream line naming the removed file with #{what} escalates",
+        reasons(blockers([start], text_hits: [['app-1.1/bin/app.sh', line]])),
+        [[start, 'app-1.1/bin/app.sh names it']]
+end
+check 'an upstream line naming the removed file under a renumbered directory escalates',
+      reasons(blockers(%w[app-1.0/start.py], text_hits: [['app-1.1/bin/app.sh', 'exec /opt/app-1.1/start.py']])),
+      [['app-1.0/start.py', 'app-1.1/bin/app.sh names it']]
+check 'a removed file at the top of the tree is named under any directory',
+      reasons(blockers(%w[start.py], text_hits: [['bin/app.sh', 'exec /opt/app/start.py']])),
+      [['start.py', 'bin/app.sh names it']]
+{
+  'a longer dotted name' => 'exec python3 $IDE_HOME/lib/jackson.start.py',
+  'a longer hyphenated name' => 'exec python3 $IDE_HOME/lib/my-start.py',
+  'a longer underscored name' => 'exec python3 $IDE_HOME/lib/my_start.py',
+  'a longer word' => 'exec python3 $IDE_HOME/lib/restart.py',
+  'another directory' => 'exec python3 $IDE_HOME/plugins/lib/modules/start.py'
+}.each do |what, line|
+  check "an upstream line naming #{what} does not name the removed file",
+        blockers([start], text_hits: [['app-1.1/bin/app.sh', line]]), []
+end
+check 'the ebuild still names the removed file inside a longer name',
+      reasons(blockers([start], refs: { 'app-1.ebuild' => "\tfperms +x /opt/app/lib/jackson.start.py\n" })),
+      [[start, 'app-1.ebuild names it']]
+check 'a files/ wrapper still names the removed file under another directory',
+      reasons(blockers([start], refs: { 'app-1.ebuild' => EBUILD, 'files/app.sh' => "exec /opt/other/start.py\n" })),
+      [[start, 'files/app.sh names it']]
+
+# Two escalations from the overlay as they were posted: every removal with the reason it was
+# blocked. Both bumps merged as pure renames.
+FIXTURES = File.join(__dir__, 'payload_removals')
+posted = lambda do |name|
+  File.readlines(File.join(FIXTURES, "#{name}.blocked.tsv"), chomp: true).map { |l| l.split("\t", 2) }
+end
+hits_of = ->(rows) { rows.filter_map { |_p, why| why.match(/\A(\S+) names it: (.*)\z/)&.captures } }
+ebuild_of = ->(name) { { "#{name}.ebuild" => File.read(File.join(FIXTURES, "#{name}.ebuild")) } }
+
+# pi-coding-agent-bin 1.5.0 (issue 16060): upstream dropped the sandbox example, and the new
+# examples/tsconfig.json names a dev-tree ../../../packages/chord/src/index.ts. The bare
+# package.json in pi/package.json's own build script is still a hit, so this bump escalates.
+pi = posted.call('pi-coding-agent-bin-1.5.0')
+pi_removed = %w[.gitignore index.ts package-lock.json package.json].map { |f| "pi/examples/extensions/sandbox/#{f}" }
+check 'pi: a src/index.ts of another package does not name the removed example index.ts',
+      reasons(blockers(pi_removed, refs: ebuild_of.call('pi-coding-agent-bin-1.5.0'), text_hits: hits_of.call(pi),
+                                   new_tree: %w[pi/pi pi/package.json pi/examples/tsconfig.json])),
+      [['pi/examples/extensions/sandbox/package.json', 'pi/package.json names it']]
+
+# rebased-bin 1.1.24 (issue 16362): lib/annotations.jar became
+# lib/intellij.libraries.jackson.annotations.jar, and other jars moved under plugins/*/lib/modules/
+rebased = posted.call('rebased-bin-1.1.24')
+named, native = rebased.partition { |_p, why| why.include?(' names it: ') }
+rebased_tree = %w[rebased-bin-1.1.24/bin/rebased.sh rebased-bin-1.1.24/product-info.json]
+check 'rebased: no removed jar is named by a longer jar name or by its new plugins/ location',
+      blockers(named.map(&:first), refs: ebuild_of.call('rebased-bin-1.1.24'), text_hits: hits_of.call(rebased),
+                                   new_tree: rebased_tree), []
+check 'rebased: the removed native libraries still escalate',
+      blockers(native.map(&:first), refs: ebuild_of.call('rebased-bin-1.1.24'), text_hits: hits_of.call(rebased),
+                                    new_tree: rebased_tree), native
+check 'rebased: the fixture still holds every jar the old matcher blocked', [named.size, native.size], [47, 4]
+
 check 'unread text files escalate everything',
       reasons(blockers(%w[opt/app/changelog.md], text_complete: false)),
       [['(all)', "the new tree's text files were not all read (they exceed #{AD::TEXT_TOTAL_CAP} bytes in all)"]]

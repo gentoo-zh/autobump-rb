@@ -317,18 +317,42 @@ module Autobump
               end
         # a .desktop entry names its icon without the extension
         icon = "Icon=#{base.sub(ICON_FILE, '')}" if base.match?(ICON_FILE)
-        why ||= mention(refs, base, icon) || mention(text_hits, base, icon)
+        why ||= mention(refs, icon) { |l| l.include?(base) } || mention(text_hits, icon) { |l| names_path?(l, p) }
         blockers << [p, why] if why
       end
       blockers
     end
 
-    def self.mention(sources, base, icon)
+    def self.mention(sources, icon)
       sources.each do |name, text|
-        line = text.each_line.find { |l| l.include?(base) || (icon && l.strip == icon) }
+        line = text.each_line.find { |l| yield(l) || (icon && l.strip == icon) }
         return "#{name} names it: #{line.strip}" if line
       end
       nil
+    end
+
+    # Whether an upstream line names the removed path, not just a name that ends like it: the
+    # basename must start a name, so rebased's intellij.libraries.jackson.annotations.jar is not
+    # lib/annotations.jar, and a literal parent directory written in front of it must be the
+    # removed file's own, so pi's ../../../packages/chord/src/index.ts is not
+    # examples/extensions/sandbox/index.ts. A bare name, ./ or ../, a variable or a parent that
+    # differs only in its numbers still names it. The ebuild and files/ keep the plain substring
+    # match: those lines are the maintainer's, and nothing there gets looser.
+    def self.names_path?(line, path)
+      base = File.basename(path)
+      parent = File.basename(File.dirname(path))
+      numbers = ->(s) { s.gsub(/\d+(?:\.\d+)*/, VER_HOLE) }
+      at = -1
+      while (at = line.index(base, at + 1))
+        next if at.positive? && line[at - 1].match?(/[A-Za-z0-9._-]/)
+        return true unless at.positive? && line[at - 1] == '/' && path.include?('/')
+
+        dir = line[0, at - 1][/[A-Za-z0-9._@+-]*\z/]
+        lead = at - 2 - dir.length
+        return true if dir.empty? || %w[. ..].include?(dir) || (lead >= 0 && line[lead] == '$') ||
+                       numbers.call(dir) == numbers.call(parent)
+      end
+      false
     end
 
     def self.angle_blocker(path, new_tree, needed)
