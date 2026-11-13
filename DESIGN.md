@@ -45,11 +45,15 @@ new ebuild, drops anything older; `0` keeps all), and `pkgdev manifest` keeps th
 A PR opens as a draft when only amd64 was built (multi-arch keywords), when the GUI launch probe
 failed, or when a rule accepted a difference it would otherwise escalate on (`accepted_diffs`: a raised
 Rust floor, a raised Go floor that another go.mod under S disagrees with, a toolchain note, accepted
-payload removals). The body lists each accepted difference,
+payload removals that are not all data). The body lists each accepted difference,
 and the engine prints `PR opened (draft: <reasons>)`, which the overlay's sweep copies into the issue.
 What the build already vouches for goes to `info_notes` instead: the body lists it under its own
 heading, and it never makes the PR a draft. A raised Go floor is one: the stage escalates a go.mod
 floor no visible dev-lang/go meets before it rewrites, and the build runs against the raised atom.
+So are accepted payload removals when there are at most 20 and each is a data file (pak, font,
+image, html, css, source map, locale JSON or JSON directly in resources/) or a hex-named cache
+entry whose directory gained another one; a script, jar, wasm, native module or unknown extension
+still drafts.
 
 ## Classification signals (stage 2)
 

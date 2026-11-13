@@ -107,6 +107,41 @@ module Autobump
       'smoke inconclusive: no version output matched and no GUI launch ran 15s'
     end
 
+    # Removals the smoke test vouches for on its own: data the app reads, not code it runs. A
+    # removed script, jar, wasm or native module may only load on a path the smoke test never
+    # takes, so any of those, an unknown extension, or more than DATA_REMOVALS_MAX paths still
+    # drafts the PR.
+    DATA_FILE = /\.(?:pak|ttf|otf|ttc|woff2?|eot|png|svg|ico|icns|jpe?g|gif|webp|bmp|xpm|html?|css|map)\z/i
+    DATA_REMOVALS_MAX = 20
+    # an extensionless hex hash, as a V8 compile cache names its entries
+    HASH_ONLY = /\A[0-9a-f]{8,}\z/
+
+    def self.data_only_removals?(removed, added)
+      return false if removed.empty? || removed.size > DATA_REMOVALS_MAX
+
+      removed.all? { |p| data_file?(p) || hash_replaced?(p, added) }
+    end
+
+    # JSON is data only as a locale or a file directly in resources/; elsewhere it may be the
+    # package.json or config an app loads its code by.
+    def self.data_file?(path)
+      return true if path.match?(DATA_FILE)
+      return false unless path.end_with?('.json') && File.basename(path) != 'package.json'
+
+      dirs = File.dirname(path).split('/')
+      dirs.last == 'resources' || dirs.any? { |d| %w[locales locale].include?(d) }
+    end
+
+    # A hash-named entry whose directory gained another hash-named entry: a cache rebuilt.
+    def self.hash_replaced?(path, added)
+      return false unless hash_only?(path)
+
+      dir = File.dirname(path)
+      added.any? { |a| a != path && File.dirname(a) == dir && hash_only?(a) }
+    end
+
+    def self.hash_only?(path) = File.basename(path).match?(HASH_ONLY)
+
     private
 
     def settle_payload_removals
@@ -122,7 +157,13 @@ module Autobump
       end
       c.accept_payload = true
       more = removed.size > 10 ? " (+#{removed.size - 10} more)" : ''
-      (c.accepted_diffs ||= []) << "payload removed paths accepted: #{removed.first(10).join(', ')}#{more}"
+      listed = "#{removed.first(10).join(', ')}#{more}"
+      added = File.exist?(ev('tree-added.txt')) ? File.readlines(ev('tree-added.txt')).map(&:chomp) : []
+      if self.class.data_only_removals?(removed, added)
+        (c.info_notes ||= []) << "payload removed paths accepted (data files only): #{listed}"
+      else
+        (c.accepted_diffs ||= []) << "payload removed paths accepted: #{listed}"
+      end
       Log.log "payload: #{removed.size} removed path(s) accepted: named nowhere, installed clean, smoke ran the app"
     end
 
