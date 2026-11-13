@@ -174,16 +174,23 @@ class SettleProbe < BT
 end
 
 ev = Autobump::Evidence.new('payload-removals')
-settle = lambda do |removed, **smoke|
+# [accepted, differences that draft the PR, informational notes]; added is ArtifactDiff's raw
+# tree-added.txt, nil when it left none
+settle = lambda do |removed, added: [], **smoke|
+  if added
+    ev.write('tree-added.txt', added.map { |a| "#{a}\n" }.join)
+  else
+    FileUtils.rm_f(ev.path('tree-added.txt'))
+  end
   c = Autobump::Context.new(payload: true, install: true, evidence: ev, payload_pending: removed)
   SettleProbe.new(c, **smoke).run
-  [c.accept_payload, c.accepted_diffs]
+  [c.accept_payload, c.accepted_diffs, c.info_notes]
 rescue Autobump::Escalate => e
   e.message
 end
 check 'a smoke-tested install accepts the removals for a draft PR',
       settle.call(kiro, version_ok: true),
-      [true, ['payload removed paths accepted: opt/app/libEGL.so, opt/app/libGLESv2.so, opt/app/changelog.md']]
+      [true, ['payload removed paths accepted: opt/app/libEGL.so, opt/app/libGLESv2.so, opt/app/changelog.md'], nil]
 many = (1..12).map { |i| "opt/app/doc/note#{i}.md" }
 check 'the accepted list names the first ten and counts the rest',
       settle.call(many, version_ok: false, gui_launched: true)[1],
@@ -192,6 +199,54 @@ check 'an inconclusive smoke escalates the removals',
       settle.call(kiro, version_ok: false),
       'payload layout changed (3 removed path(s) named nowhere, but smoke inconclusive: ' \
       'no version output matched and no GUI launch ran 15s)'
+
+# Only data the smoke test vouches for leaves the PR ready; the line stays in the body as a note.
+# The removals of the last two weeks' payload drafts (overlay PRs), as settle_payload_removals got them:
+claude = %w[Tray-Win32-Dark.ico Tray-Win32.ico TrayIconTemplate.png TrayIconTemplate@2x.png TrayIconTemplate@3x.png]
+         .map { |f| "usr/lib/claude-desktop/resources/#{f}" }
+check 'claude-desktop 16147: tray icons only are a note, not a draft',
+      settle.call(claude, version_ok: false, gui_launched: true),
+      [true, nil, ["payload removed paths accepted (data files only): #{claude.join(', ')}"]]
+check 'chatgpt-desktop 15887: one example html is a note',
+      settle.call(%w[usr/lib/chatgpt/resources/plugins/openai-bundled/plugins/visualize/skills/visualize/examples/calendar.html],
+                  version_ok: true)[1], nil
+check 'reasonix-bin 16371: one font is a note',
+      settle.call(%w[frontend-next/dist/fonts/studio-mono-400.ttf], version_ok: true)[1], nil
+cache = 'opt/T3 Code (Beta)/resources/server-compile-cache'
+# the first ten as the PR listed them; it named five more without their hashes
+t3 = %w[02278096 167ab736 17599c36 17d5677f 198f1d6c 1bec94f7 28b4e94e 517a9bb3 59b4686e 7b12861e
+        8a0b3c4d 9e8f7a6b a1b2c3d4 c0ffee00 d00dfeed].map { |h| "#{cache}/#{h}" }
+check 't3code-bin 16620: a rebuilt compile cache is a note',
+      settle.call(t3, added: ["#{cache}/3f9a01bc", "#{cache}/77aa21de"], version_ok: true)[1], nil
+check 'the same cache with nothing added in its place drafts',
+      settle.call(t3, added: ["opt/T3 Code (Beta)/resources/other/3f9a01bc"], version_ok: true)[2], nil
+check 'and so does one with no tree-added.txt to read', settle.call(t3, added: nil, version_ok: true)[2], nil
+siyuan = %w[opt/SiYuan/locales/pt-PT.pak opt/SiYuan/resources/stage/build/app/602.04bc8988a95e6a337cd5.js
+            opt/SiYuan/resources/stage/build/app/base.2a97d70b345d5431d8ce.css
+            opt/SiYuan/resources/stage/loading-pure.svg opt/SiYuan/resources/stage/loading.svg]
+check 'siyuan-bin 16468: a removed script chunk among data still drafts',
+      settle.call(siyuan, version_ok: true),
+      [true, ["payload removed paths accepted: #{siyuan.join(', ')}"], nil]
+check 'jetbrains-toolbox 15946: a removed jar still drafts',
+      settle.call(%w[jetbrains-toolbox/bin/lib/app-os-win.jar], version_ok: true)[1],
+      ['payload removed paths accepted: jetbrains-toolbox/bin/lib/app-os-win.jar']
+
+data = ->(removed, added = []) { BT.data_only_removals?(removed, added) }
+%w[js mjs cjs jar py so node wasm sh ts dat bin].each do |ext|
+  check "a removed .#{ext} is not data", data.call(["opt/app/resources/a.#{ext}", 'opt/app/resources/b.png']), false
+end
+check 'an extensionless file that is no hash is not data', data.call(%w[opt/app/helper]), false
+check 'a hex name replaced in another directory is not data',
+      data.call(%w[opt/app/cache/0123abcd], %w[opt/app/other/89efcdab]), false
+check 'a hex name is not its own replacement', data.call(%w[opt/app/cache/0123abcd], %w[opt/app/cache/0123abcd]), false
+check 'twenty data files are a note', data.call((1..20).map { |i| "opt/app/icons/#{i}.png" }), true
+check 'twenty-one are not', data.call((1..21).map { |i| "opt/app/icons/#{i}.png" }), false
+check 'nothing removed is no data-only removal', data.call([]), false
+check 'locale json is data', data.call(%w[opt/app/locales/pt-PT.json usr/lib/claude-desktop/resources/de-DE.json]), true
+check 'package.json is not', data.call(%w[opt/app/locales/package.json]), false
+check 'json an app may load code by is not',
+      [data.call(%w[opt/app/resources/app/product.json]), data.call(%w[opt/app/config.json])], [false, false]
+check 'upper-case extensions count', data.call(%w[opt/app/Logo.PNG]), true
 
 # smoke_version itself: a version line from a command that failed did not run the app
 class VersionProbe < BT
