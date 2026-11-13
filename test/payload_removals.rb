@@ -46,9 +46,10 @@ EBUILD = <<~EB
 EB
 
 def blockers(removed, old_exec: [], refs: { 'app-1.ebuild' => EBUILD }, text_hits: [],
-             text_complete: true, needed: NEEDED, new_tree: ELECTRON_TREE)
+             text_complete: true, needed: NEEDED, new_tree: ELECTRON_TREE, keywords: nil)
   AD.removal_blockers(removed, new_tree: new_tree, old_exec: old_exec, refs: refs,
-                                text_hits: text_hits, text_complete: text_complete, needed: needed)
+                                text_hits: text_hits, text_complete: text_complete, needed: needed,
+                                keywords: keywords)
 end
 
 def reasons(list) = list.map { |path, why| [path, why[/\A[^:]+/]] }
@@ -222,6 +223,90 @@ check 'rebased: the removed native libraries still escalate',
                                     new_tree: rebased_tree), native
 check 'rebased: the fixture still holds every jar the old matcher blocked', [named.size, native.size], [47, 4]
 
+# --- node_modules prebuilds for another platform ---------------------------------------------
+# rstudio-desktop-bin 2026.11.0_p203 (issue 16671): upstream dropped the copilot-sdk packages
+# for every platform but linux-x64, which the 2026.10.1_p239 ebuild deleted itself.
+studio_eb = File.read(File.join(FIXTURES, 'rstudio-desktop-bin-2026.10.1_p239.ebuild'))
+studio_refs = ->(text) { { 'rstudio-desktop-bin-2026.11.0_p203.ebuild' => text } }
+studio = posted.call('rstudio-desktop-bin-2026.11.0_p203')
+studio_removed = studio.map(&:first)
+studio_exec = studio.select { |_p, why| why == 'executable in the old tree' }.map(&:first)
+sdk = 'usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github'
+studio_tree = %W[usr/lib/rstudio/rstudio usr/lib/rstudio/resources.pak
+                 #{sdk}/copilot-sdk-linux-x64/prebuilds/linux-x64/copilot-runtime
+                 #{sdk}/copilot-sdk-linux-x64/prebuilds/linux-x64/runtime.node]
+studio_needed = { 'usr/lib/rstudio/rstudio' => %w[libc.so.6],
+                  "#{sdk}/copilot-sdk-linux-x64/prebuilds/linux-x64/runtime.node" => %w[libc.so.6] }
+studio_blockers = lambda do |removed = studio_removed, ebuild: studio_eb, keywords: %w[-* ~amd64], **kw|
+  blockers(removed, old_exec: studio_exec, refs: studio_refs.call(ebuild), new_tree: studio_tree,
+                    needed: studio_needed, keywords: keywords, **kw)
+end
+without_rm = studio_eb.gsub(/^\t\trm -r .*\n/, '')
+check 'rstudio: the fixture is the posted escalation and the ebuild still deletes the platform packages',
+      [studio.size, studio_exec.size, studio_eb.include?('copilot-sdk-{darwin-arm64,'), without_rm == studio_eb],
+      [16, 12, true, false]
+# The ebuild matches by substring, and SRC_URI's download1.rstudio.org holds `rg`, so the
+# bundled ripgrep binaries are named by the ebuild whatever else changes.
+rg = ->(list) { list.map { |p, why| p.end_with?('/rg') ? [p, 'rstudio-desktop-bin-2026.11.0_p203.ebuild names it'] : [p, why] } }
+check "rstudio: the ebuild's rm -r of the platform packages upstream dropped escalates",
+      reasons(studio_blockers.call),
+      rg.call(studio_removed.map { |p| [p, "rstudio-desktop-bin-2026.11.0_p203.ebuild names its directory #{p[%r{@github/([^/]+)/}, 1]}"] })
+check 'rstudio: without that rm, darwin, win32 and linux-arm64 prebuilds wait for the build on -* ~amd64',
+      reasons(studio_blockers.call(ebuild: without_rm)), rg.call(studio.select { |p, _why| p.end_with?('/rg') })
+# the linux-arm64 ones are blocked by their mode before the ebuild is read
+arm = studio.select { |p, _why| p.include?('linux-arm64') || p.end_with?('/rg') }
+            .map { |p, why| p.include?('linux-arm64') ? [p, why] : rg.call([[p, why]])[0] }
+check 'rstudio: linux-arm64 prebuilds still escalate on ~amd64 ~arm64',
+      reasons(studio_blockers.call(ebuild: without_rm, keywords: %w[~amd64 ~arm64])), arm
+check 'rstudio: linux-arm64 prebuilds still escalate when KEYWORDS is unknown',
+      reasons(studio_blockers.call(ebuild: without_rm, keywords: nil)), arm
+check 'rstudio: linux-arm64 prebuilds still escalate when KEYWORDS uses a variable',
+      reasons(studio_blockers.call(ebuild: without_rm, keywords: %w[~amd64 ${ARM64_KEYWORD}])), arm
+x64 = %W[#{sdk}/copilot-sdk-linux-x64/prebuilds/linux-x64/copilot-runtime #{sdk}/copilot-sdk-linux-x64/prebuilds/linux-x64/runtime.node]
+check 'a dropped linux-x64 prebuild escalates on -* ~amd64',
+      reasons(blockers(x64, old_exec: x64.first(1), keywords: %w[-* ~amd64], new_tree: studio_tree)),
+      [[x64[0], 'executable in the old tree'], [x64[1], 'a shared object or native module']]
+check 'a dropped linux-x64 prebuild is foreign only when KEYWORDS lacks amd64',
+      blockers(x64, old_exec: x64.first(1), keywords: %w[-* ~arm64], new_tree: studio_tree), []
+
+nm = 'opt/app/resources/app.asar.unpacked/node_modules'
+mac = "#{nm}/fsevents/prebuilds/darwin-arm64/fsevents.node"
+check 'a darwin prebuild under prebuilds/ waits for the build', blockers([mac], keywords: %w[~amd64]), []
+check 'a foreign prebuild some object still NEEDs escalates',
+      blockers([mac], keywords: %w[~amd64], needed: NEEDED.merge('opt/app/app' => %w[fsevents.node])),
+      [[mac, 'still NEEDED by opt/app/app']]
+check 'a foreign prebuild escalates when NEEDED cannot be read',
+      blockers([mac], keywords: %w[~amd64], needed: nil), [[mac, 'NEEDED of the new tree unknown (scanelf failed)']]
+check 'a foreign prebuild the ebuild names escalates',
+      reasons(blockers([mac], keywords: %w[~amd64], refs: { 'app-1.ebuild' => "\tfperms +x #{mac}\n" })),
+      [[mac, 'app-1.ebuild names it']]
+check 'a desktop entry inside a foreign package still escalates',
+      reasons(blockers(%W[#{nm}/tool-win32-x64/tool.desktop], keywords: %w[~amd64])),
+      [["#{nm}/tool-win32-x64/tool.desktop", 'a desktop entry or unit file']]
+{
+  'a Wine prefix' => 'opt/wechat/drive_c/windows/system32/win32-x64/wechat.exe',
+  'prebuilds/ outside node_modules' => 'opt/app/prebuilds/darwin-arm64/helper',
+  'a platform directory that is not a package' => "#{nm}/tool/bin/darwin-arm64/helper",
+  'a platform name without a package name' => "#{nm}/@esbuild/darwin-arm64/bin/esbuild",
+  'a musl prebuild on its own arch' => "#{nm}/tool/prebuilds/linux-x64-musl/helper"
+}.each do |what, path|
+  check "an executable in #{what} still escalates",
+        reasons(blockers([path], old_exec: [path], keywords: %w[-* ~amd64])), [[path, 'executable in the old tree']]
+end
+
+# the ebuild is read after bash brace expansion, so {a,b} names both
+check 'a removed file the ebuild names inside {a,b} escalates',
+      blockers(%w[opt/app/changelog.md], refs: { 'app-1.ebuild' => "\trm opt/app/{changelog,readme}.md || die\n" }),
+      [['opt/app/changelog.md', 'app-1.ebuild names it: rm opt/app/{changelog,readme}.md || die']]
+check 'brace expansion leaves parameter expansions alone',
+      AD.brace_expand('rm -r "${cop}"/sdk-{darwin,win32}-x64 ${PN,,}'),
+      ['rm -r "${cop}"/sdk-{darwin,win32}-x64 ${PN,,}', 'rm -r "${cop}"/sdk-darwin-x64 ${PN,,}',
+       'rm -r "${cop}"/sdk-win32-x64 ${PN,,}']
+check 'a directory the new tree dropped, named only as a word, does not escalate',
+      blockers(%w[opt/app/examples/demo.md], refs: { 'app-1.ebuild' => "IUSE=\"examples\"\n" }), []
+check 'a directory the new tree still has, named by the ebuild, does not escalate',
+      blockers(%w[opt/app/resources/old.md], refs: { 'app-1.ebuild' => "\trm -r opt/app/resources/locales || die\n" }), []
+
 check 'unread text files escalate everything',
       reasons(blockers(%w[opt/app/changelog.md], text_complete: false)),
       [['(all)', "the new tree's text files were not all read (they exceed #{AD::TEXT_TOTAL_CAP} bytes in all)"]]
@@ -392,9 +477,10 @@ Dir.mktmpdir('payload-removals-') do |tmp|
   end
   common = { 'opt/app/app' => "\x7fELF", 'opt/app/resources.pak' => '', 'opt/app/icudtl.dat' => '',
              'usr/share/applications/app.desktop' => "[Desktop Entry]\nExec=/opt/app/app %U\nIcon=app\n" }
-  run = lambda do |tag, old_extra, new_extra = {}, install: true, ebuild: EBUILD, files_dir: {}, unreadable: nil|
+  run = lambda do |tag, old_extra, new_extra = {}, install: true, ebuild: EBUILD, files_dir: {}, unreadable: nil,
+                   old_exec: []|
     pkgdir = build.call("#{tag}-pkg", { 'app-2.ebuild' => ebuild }.merge(files_dir))
-    old = build.call("#{tag}-old", common.merge(old_extra), exec: %w[opt/app/app opt/app/libEGL.so opt/app/helper])
+    old = build.call("#{tag}-old", common.merge(old_extra), exec: %w[opt/app/app opt/app/libEGL.so opt/app/helper] + old_exec)
     new = build.call("#{tag}-new", common.merge(new_extra), exec: %w[opt/app/app opt/app/bin/app])
     FileUtils.chmod(0o000, File.join(new, unreadable)) if unreadable
     cfg = Struct.new(:sudo).new('')
@@ -436,6 +522,23 @@ Dir.mktmpdir('payload-removals-') do |tmp|
   check 'tree: a file files/ names escalates',
         run.call('files', { 'opt/app/changelog.md' => '' }, files_dir: { 'files/app-docs.patch' => "+see changelog.md\n" }),
         'payload layout changed (opt/app/changelog.md: files/app-docs.patch names it: +see changelog.md)'
+  # KEYWORDS is read from the new ebuild
+  arm_sdk = 'opt/app/resources/app/node_modules/@x/sdk-linux-arm64/bin/tool'
+  amd64_only = EBUILD.sub('QA_PREBUILT', "KEYWORDS=\"-* ~amd64\"\nQA_PREBUILT")
+  check 'tree: a linux-arm64 package executable waits for the build on -* ~amd64',
+        run.call('arm', { arm_sdk => "\x7fELF" }, ebuild: amd64_only, old_exec: [arm_sdk]), [arm_sdk]
+  check 'tree: a linux-arm64 package executable escalates on ~amd64 ~arm64',
+        run.call('arm2', { arm_sdk => "\x7fELF" }, ebuild: amd64_only.sub('-* ~amd64', '~amd64 ~arm64'), old_exec: [arm_sdk]),
+        "payload layout changed (#{arm_sdk}: executable in the old tree)"
+  check 'tree: a linux-arm64 package executable escalates without KEYWORDS',
+        run.call('arm3', { arm_sdk => "\x7fELF" }, old_exec: [arm_sdk]),
+        "payload layout changed (#{arm_sdk}: executable in the old tree)"
+  check 'tree: an ebuild deleting the dropped package escalates',
+        run.call('arm4', { arm_sdk => "\x7fELF" }, { arm_sdk.sub('linux-arm64', 'linux-x64') => "\x7fELF" },
+                 old_exec: [arm_sdk],
+                 ebuild: amd64_only.sub('src_install() {', "src_prepare() {\n\trm -r opt/app/resources/app/node_modules/@x/sdk-{linux-arm64,darwin-x64} || die\n}\nsrc_install() {")),
+        "payload layout changed (#{arm_sdk}: app-2.ebuild names its directory sdk-linux-arm64: " \
+        'rm -r opt/app/resources/app/node_modules/@x/sdk-{linux-arm64,darwin-x64} || die)'
   # siyuan ships a 7 MB one-line mermaid icons.json and locale JSON over the per-file cap
   big = "{\"pad\": \"#{'x' * (300 * 1024)}\"}"
   check 'tree: a retained config over the per-file cap is read, and naming nothing it lets the build decide',

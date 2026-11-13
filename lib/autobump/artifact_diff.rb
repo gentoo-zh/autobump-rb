@@ -267,6 +267,13 @@ module Autobump
     NATIVE_OBJECT = /\.(?:so(?:\.\d+)*|node)\z/
     CONSUMER_FILE = /\.(?:desktop|service|socket|timer)\z/
     ICON_FILE = /\.(?:png|svg|xpm|ico)\z/
+    # a node_modules prebuild for one platform: prebuilds/<os>-<arch>/, or a package named
+    # <name>-<os>-<arch> (@github/copilot-sdk-darwin-arm64, @rollup/rollup-linux-x64-gnu)
+    PREBUILD_DIR = /\A(?<os>darwin|win32|linux)-(?<arch>x64|amd64|arm64)(?:-[A-Za-z0-9_]+)*\z/
+    PLATFORM_PACKAGE = /\A.+-(?<os>darwin|win32|linux)-(?<arch>x64|amd64|arm64)(?:-[A-Za-z0-9_]+)*\z/
+    # bash brace expansion; ${...} is a parameter expansion and stays as written
+    BRACE = /(?<!\$)\{([^{}$]*,[^{}$]*)\}/
+    PATH_CHAR = /[A-Za-z0-9._-]/
     TEXT_FILE_CAP = 256 * 1024
     TEXT_TOTAL_CAP = 64 * 1024 * 1024
     # the new tree's .desktop entries, scripts and configs that mention a removed name;
@@ -302,33 +309,98 @@ module Autobump
     #                  line is the matched name alone in a config over TEXT_FILE_CAP
     #   text_complete  false when those configs exceeded TEXT_TOTAL_CAP in all, so not all were read
     #   needed         {path => [NEEDED entries]} of the new tree's ELF objects; nil if unknown
-    def self.removal_blockers(removed, new_tree:, old_exec:, refs:, text_hits:, text_complete:, needed:)
+    #   keywords       the new ebuild's KEYWORDS words; nil if unknown
+    def self.removal_blockers(removed, new_tree:, old_exec:, refs:, text_hits:, text_complete:, needed:, keywords: nil)
       blockers = []
       unless text_complete
         blockers << ['(all)', "the new tree's text files were not all read (they exceed #{TEXT_TOTAL_CAP} bytes in all)"]
       end
+      new_dirs = new_tree.flat_map { |f| ancestors(f) }.to_h { |d| [d, true] }
+      words = Hash.new { |h, l| h[l] = brace_expand(l) }
       removed.each do |p|
         base = File.basename(p)
         # Electron's libraries are often mode 755, so their own rule comes before the mode
         why = if ANGLE_FILES.include?(base) then angle_blocker(p, new_tree, needed)
+              elsif foreign_prebuild?(p, keywords) && !base.match?(CONSUMER_FILE) then needed_blocker(p, needed)
               elsif old_exec.include?(p) then 'executable in the old tree'
               elsif base.match?(CONSUMER_FILE) then 'a desktop entry or unit file'
               elsif base.match?(NATIVE_OBJECT) then 'a shared object or native module'
               end
         # a .desktop entry names its icon without the extension
         icon = "Icon=#{base.sub(ICON_FILE, '')}" if base.match?(ICON_FILE)
-        why ||= mention(refs, icon) { |l| l.include?(base) } || mention(text_hits, icon) { |l| names_path?(l, p) }
+        # rstudio's ebuild deletes the copilot-sdk-{darwin-arm64,...} packages: a directory the
+        # new tree no longer has, named by the ebuild, fails that step or is stale
+        gone = ancestors(p).find { |d| !new_dirs[d] }
+        gone &&= File.basename(gone)
+        why ||= mention(refs, icon) { |l| words[l].any? { |w| w.include?(base) } } ||
+                (gone && mention(refs, nil, "names its directory #{gone}") { |l| words[l].any? { |w| names_dir?(w, gone) } }) ||
+                mention(text_hits, icon) { |l| names_path?(l, p) }
         blockers << [p, why] if why
       end
       blockers
     end
 
-    def self.mention(sources, icon)
+    def self.mention(sources, icon, says = 'names it')
       sources.each do |name, text|
         line = text.each_line.find { |l| yield(l) || (icon && l.strip == icon) }
-        return "#{name} names it: #{line.strip}" if line
+        return "#{name} #{says}: #{line.strip}" if line
       end
       nil
+    end
+
+    # the directories a path sits in, outermost first
+    def self.ancestors(path)
+      parts = path.split('/')[0...-1]
+      (1..parts.size).map { |n| parts.first(n).join('/') }
+    end
+
+    # The words bash makes of a line's {a,b} groups, the line itself included. Capped at 256.
+    def self.brace_expand(line)
+      words = [line]
+      while words.size < 256 && (i = words.index { |w| w.match?(BRACE) })
+        m = words[i].match(BRACE)
+        words[i, 1] = m[1].split(',', -1).map { |alt| "#{m.pre_match}#{alt}#{m.post_match}" }
+      end
+      [line, *words].uniq
+    end
+
+    # a whole path component, written beside a `/`, so IUSE="examples" names no directory
+    def self.names_dir?(line, name)
+      at = -1
+      while (at = line.index(name, at + 1))
+        before = at.positive? ? line[at - 1] : ''
+        after = line[at + name.length].to_s
+        next if before.match?(PATH_CHAR) || after.match?(PATH_CHAR)
+        return true if before == '/' || after == '/'
+      end
+      false
+    end
+
+    # Whether a removed path sits in a node_modules prebuild for a platform the ebuild does not
+    # install on, so its mode or extension says nothing about this package. darwin and win32 never
+    # load here; a linux one is foreign only to an arch KEYWORDS lacks, so linux-arm64 is foreign
+    # to rstudio's "-* ~amd64" and not to "~amd64 ~arm64". With KEYWORDS unknown every linux
+    # prebuild counts as native. Outside node_modules nothing is foreign: a Wine prefix's
+    # drive_c/windows is the payload.
+    def self.foreign_prebuild?(path, keywords)
+      segs = path.split('/')
+      first = segs.index('node_modules') or return false
+      arches = keywords&.reject { |k| k.start_with?('-') }&.map { |k| k.delete_prefix('~') }
+      arches = nil if arches&.empty? || keywords&.any? { |k| k.include?('$') }
+      (first + 1...segs.size - 1).any? do |i|
+        prev = segs[i - 1]
+        package = prev == 'node_modules' || (prev.start_with?('@') && segs[i - 2] == 'node_modules')
+        m = (prev == 'prebuilds' && segs[i].match(PREBUILD_DIR)) || (package && segs[i].match(PLATFORM_PACKAGE))
+        m && (m[:os] != 'linux' || (arches && !arches.include?(m[:arch] == 'arm64' ? 'arm64' : 'amd64')))
+      end
+    end
+
+    def self.needed_blocker(path, needed)
+      return 'NEEDED of the new tree unknown (scanelf failed)' if needed.nil?
+
+      # a NEEDED entry may be spelled as a path (/opt/app/libEGL.so)
+      user = needed.find { |_f, libs| libs.any? { |l| File.basename(l) == File.basename(path) } }
+      "still NEEDED by #{user[0]}" if user
     end
 
     # Whether an upstream line names the removed path, not just a name that ends like it: the
@@ -344,7 +416,7 @@ module Autobump
       numbers = ->(s) { s.gsub(/\d+(?:\.\d+)*/, VER_HOLE) }
       at = -1
       while (at = line.index(base, at + 1))
-        next if at.positive? && line[at - 1].match?(/[A-Za-z0-9._-]/)
+        next if at.positive? && line[at - 1].match?(PATH_CHAR)
         return true unless at.positive? && line[at - 1] == '/' && path.include?('/')
 
         dir = line[0, at - 1][/[A-Za-z0-9._@+-]*\z/]
@@ -365,9 +437,7 @@ module Autobump
       end
       return 'no Electron binary beside it in the new tree' if main.empty?
 
-      # a NEEDED entry may be spelled as a path (/opt/app/libEGL.so)
-      user = needed.find { |_f, libs| libs.any? { |l| File.basename(l) == File.basename(path) } }
-      "still NEEDED by #{user[0]}" if user
+      needed_blocker(path, needed)
     end
 
     def initialize(ctx) = (@c = ctx)
@@ -518,9 +588,11 @@ module Autobump
                    [file.delete_prefix("#{wd_new}/"), libs.to_s.split(',')]
                  end
                end
+      keywords = refs[File.basename(c.new_ebuild)][/^[[:space:]]*KEYWORDS="([^"]*)"/, 1]&.split
       blockers = self.class.removal_blockers(removed, new_tree: new_tree, old_exec: modes.lines.map(&:chomp),
                                              refs: refs, text_hits: text_hits,
-                                             text_complete: !errs.include?('TRUNCATED'), needed: needed)
+                                             text_complete: !errs.include?('TRUNCATED'), needed: needed,
+                                             keywords: keywords)
       blockers.unshift(['(all)', 'the old tree\'s file modes could not be read']) unless modes_ok.success?
       blockers.unshift(['(all)', "the new tree's text files could not be read: #{errs.strip[0, 120]}"]) unless read.success?
       blockers

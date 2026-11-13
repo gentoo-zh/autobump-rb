@@ -1,0 +1,16 @@
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-darwin-arm64/prebuilds/darwin-arm64/copilot-runtime	executable in the old tree
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-darwin-arm64/prebuilds/darwin-arm64/runtime.node	executable in the old tree
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-darwin-arm64/ripgrep/bin/darwin-arm64/rg	executable in the old tree
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-darwin-arm64/tgrep/bin/darwin-arm64/tgrep	executable in the old tree
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-darwin-x64/prebuilds/darwin-x64/copilot-runtime	executable in the old tree
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-darwin-x64/prebuilds/darwin-x64/runtime.node	executable in the old tree
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-darwin-x64/ripgrep/bin/darwin-x64/rg	executable in the old tree
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-darwin-x64/tgrep/bin/darwin-x64/tgrep	executable in the old tree
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-linux-arm64/prebuilds/linux-arm64/copilot-runtime	executable in the old tree
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-linux-arm64/prebuilds/linux-arm64/runtime.node	executable in the old tree
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-linux-arm64/ripgrep/bin/linux-arm64/rg	executable in the old tree
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-linux-arm64/tgrep/bin/linux-arm64/tgrep	executable in the old tree
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-win32-arm64/prebuilds/win32-arm64/msal-node-runtime.node	a shared object or native module
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-win32-arm64/prebuilds/win32-arm64/runtime.node	a shared object or native module
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-win32-x64/prebuilds/win32-x64/msal-node-runtime.node	a shared object or native module
+usr/lib/rstudio/resources/app/bin/copilot-language-server-js/node_modules/@github/copilot-sdk-win32-x64/prebuilds/win32-x64/runtime.node	a shared object or native module
