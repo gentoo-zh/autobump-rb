@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+require 'etc'
 require 'set'
 require 'shellwords'
 module Autobump
@@ -359,10 +360,43 @@ module Autobump
       c.smoke = "#{c.smoke} | GUI launch probe: #{res}"
     end
 
+    PROBE_USER = 'autobump-probe'
+
+    # The CI job runs as root with HOME=/github/home owned by another uid. VS Code forks refuse
+    # root, Firefox forks refuse a HOME they do not own, and Wails apps panic without a session
+    # bus, so the probe drafted PRs for apps that work. Launch the app the way a desktop user
+    # does: as an unprivileged user with its own home, inside a private session bus.
+    def self.as_probe_user(cmd, uid:, user:, home:, session_bus: false)
+      return cmd unless uid.zero? && home
+      bus = session_bus ? %w[dbus-run-session --] : []
+      ['runuser', '-u', user, '--', 'env', "HOME=#{home}", *bus, *cmd]
+    end
+
+    def probe_user_home
+      return @probe_user_home if defined?(@probe_user_home)
+      @probe_user_home = Process.uid.zero? ? create_probe_user : nil
+    end
+
+    def session_bus?
+      @session_bus = !`command -v dbus-run-session 2>/dev/null`.strip.empty? if @session_bus.nil?
+      @session_bus
+    end
+
+    def create_probe_user
+      nul = File::NULL
+      system('useradd', '-m', '-s', '/bin/sh', PROBE_USER, out: nul, err: nul)
+      Etc.getpwnam(PROBE_USER).dir
+    rescue ArgumentError
+      Log.log "GUI launch probe: could not create #{PROBE_USER}; launching as root"
+      nil
+    end
+
     # stderr only, stdout dropped; returns [stderr, exit status]
     def gui_launch(bin, *flags)
-      perr, _, prc = @c.sh('env', 'DISPLAY=:99', 'LIBGL_ALWAYS_SOFTWARE=1', bin, *flags,
-                           timeout: gui_timeout, stderr_only: true, in: File::NULL)
+      cmd = self.class.as_probe_user(['env', 'DISPLAY=:99', 'LIBGL_ALWAYS_SOFTWARE=1', bin, *flags],
+                                     uid: Process.uid, user: PROBE_USER, home: probe_user_home,
+                                     session_bus: session_bus?)
+      perr, _, prc = @c.sh(*cmd, timeout: gui_timeout, stderr_only: true, in: File::NULL)
       [perr.scrub, prc]
     end
 

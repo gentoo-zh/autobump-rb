@@ -45,6 +45,20 @@ check 'signal exit retains its signal number',
       F.call('/usr/bin/segfaults', 139, '', false),
       ['segfaults crashed on start (signal 11) - verify (could be headless GL)', true]
 
+U = Autobump::BuildTest.method(:as_probe_user)
+cmd = ['env', 'DISPLAY=:99', '/usr/bin/app', '--no-sandbox']
+check 'as root the launch runs as the probe user with its own home',
+      U.call(cmd, uid: 0, user: 'autobump-probe', home: '/home/autobump-probe'),
+      ['runuser', '-u', 'autobump-probe', '--', 'env', 'HOME=/home/autobump-probe', *cmd]
+check 'with dbus-run-session the launch gets a private session bus',
+      U.call(cmd, uid: 0, user: 'autobump-probe', home: '/home/autobump-probe', session_bus: true),
+      ['runuser', '-u', 'autobump-probe', '--', 'env', 'HOME=/home/autobump-probe',
+       'dbus-run-session', '--', *cmd]
+check 'as a normal user the launch is unchanged',
+      U.call(cmd, uid: 1000, user: 'autobump-probe', home: nil), cmd
+check 'as root without a probe user the launch stays as root',
+      U.call(cmd, uid: 0, user: 'autobump-probe', home: nil), cmd
+
 puts '----'
 if $fail.zero?
   puts 'gui_probe: all passed'
