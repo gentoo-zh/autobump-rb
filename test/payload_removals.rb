@@ -262,9 +262,14 @@ check 'rstudio: linux-arm64 prebuilds still escalate when KEYWORDS is unknown',
       reasons(studio_blockers.call(ebuild: without_rm, keywords: nil)), arm
 check 'rstudio: linux-arm64 prebuilds still escalate when KEYWORDS uses a variable',
       reasons(studio_blockers.call(ebuild: without_rm, keywords: %w[~amd64 ${ARM64_KEYWORD}])), arm
+check 'rstudio: linux-arm64 prebuilds still escalate when KEYWORDS uses a wildcard',
+      reasons(studio_blockers.call(ebuild: without_rm, keywords: %w[**])), arm
 x64 = %W[#{sdk}/copilot-sdk-linux-x64/prebuilds/linux-x64/copilot-runtime #{sdk}/copilot-sdk-linux-x64/prebuilds/linux-x64/runtime.node]
 check 'a dropped linux-x64 prebuild escalates on -* ~amd64',
       reasons(blockers(x64, old_exec: x64.first(1), keywords: %w[-* ~amd64], new_tree: studio_tree)),
+      [[x64[0], 'executable in the old tree'], [x64[1], 'a shared object or native module']]
+check 'a dropped linux-x64 prebuild escalates on a prefix keyword',
+      reasons(blockers(x64, old_exec: x64.first(1), keywords: %w[~amd64-linux], new_tree: studio_tree)),
       [[x64[0], 'executable in the old tree'], [x64[1], 'a shared object or native module']]
 check 'a dropped linux-x64 prebuild is foreign only when KEYWORDS lacks amd64',
       blockers(x64, old_exec: x64.first(1), keywords: %w[-* ~arm64], new_tree: studio_tree), []
@@ -302,6 +307,9 @@ check 'brace expansion leaves parameter expansions alone',
       AD.brace_expand('rm -r "${cop}"/sdk-{darwin,win32}-x64 ${PN,,}'),
       ['rm -r "${cop}"/sdk-{darwin,win32}-x64 ${PN,,}', 'rm -r "${cop}"/sdk-darwin-x64 ${PN,,}',
        'rm -r "${cop}"/sdk-win32-x64 ${PN,,}']
+check 'a line past 256 brace words names every removed file',
+      blockers(%w[opt/app/changelog.md], refs: { 'app-1.ebuild' => "\trm opt/app/{x,change}#{'{,}' * 9}log.md || die\n" }).map(&:first),
+      %w[opt/app/changelog.md]
 check 'a directory the new tree dropped, named only as a word, does not escalate',
       blockers(%w[opt/app/examples/demo.md], refs: { 'app-1.ebuild' => "IUSE=\"examples\"\n" }), []
 check 'a directory the new tree still has, named by the ebuild, does not escalate',
