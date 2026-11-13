@@ -332,8 +332,8 @@ module Autobump
         # new tree no longer has, named by the ebuild, fails that step or is stale
         gone = ancestors(p).find { |d| !new_dirs[d] }
         gone &&= File.basename(gone)
-        why ||= mention(refs, icon) { |l| words[l].any? { |w| w.include?(base) } } ||
-                (gone && mention(refs, nil, "names its directory #{gone}") { |l| words[l].any? { |w| names_dir?(w, gone) } }) ||
+        why ||= mention(refs, icon) { |l| words[l].nil? || words[l].any? { |w| w.include?(base) } } ||
+                (gone && mention(refs, nil, "names its directory #{gone}") { |l| words[l].nil? || words[l].any? { |w| names_dir?(w, gone) } }) ||
                 mention(text_hits, icon) { |l| names_path?(l, p) }
         blockers << [p, why] if why
       end
@@ -354,10 +354,12 @@ module Autobump
       (1..parts.size).map { |n| parts.first(n).join('/') }
     end
 
-    # The words bash makes of a line's {a,b} groups, the line itself included. Capped at 256.
+    # The words bash makes of a line's {a,b} groups, the line itself included; nil past 256
+    # words, so the caller treats the line as naming everything rather than miss a name.
     def self.brace_expand(line)
       words = [line]
-      while words.size < 256 && (i = words.index { |w| w.match?(BRACE) })
+      while (i = words.index { |w| w.match?(BRACE) })
+        return nil if words.size >= 256
         m = words[i].match(BRACE)
         words[i, 1] = m[1].split(',', -1).map { |alt| "#{m.pre_match}#{alt}#{m.post_match}" }
       end
@@ -386,7 +388,9 @@ module Autobump
       segs = path.split('/')
       first = segs.index('node_modules') or return false
       arches = keywords&.reject { |k| k.start_with?('-') }&.map { |k| k.delete_prefix('~') }
-      arches = nil if arches&.empty? || keywords&.any? { |k| k.include?('$') }
+      # "**", "~*" or a prefix keyword such as "~amd64-linux" says nothing exact about the arches
+      arches = nil if arches&.empty? || keywords&.any? { |k| k.include?('$') } ||
+                      arches&.any? { |a| a.include?('*') || a.include?('-') }
       (first + 1...segs.size - 1).any? do |i|
         prev = segs[i - 1]
         package = prev == 'node_modules' || (prev.start_with?('@') && segs[i - 2] == 'node_modules')
