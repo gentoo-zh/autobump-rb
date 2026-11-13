@@ -198,6 +198,19 @@ check 'a note and an accepted difference each keep their own heading',
              "- payload removed paths accepted (data files only): opt/b/a.png\n"]
 check_eq 'an empty note list renders like an unset one', render(plain_ctx.call(info_notes: [])), render(plain_ctx.call)
 
+# app-misc/crush 0.101.0 (overlay PR 16711): the raised go floor was the whole review, and the
+# PR was merged with exactly the engine's edit. Replayed, the note stays and the warning goes.
+crush = ctx(ev_with('crush', 'surface-added.txt' => '', 'surface-removed.txt' => ''),
+            pkg: 'app-misc/crush', old_pvr: '0.100.0', newver: '0.101.0', old_pv: '0.100.0', payload: false,
+            issue: '16664', smoke: '--version ok: crush: crush version 0.101.0',
+            info_notes: ['go floor raised: 1.27.0 -> 1.27.3 (go.mod: go 1.27.3)'])
+check_eq 'crush 0.101.0: the go floor raise is a note, not a draft warning', render(crush),
+         "**`app-misc/crush`** 0.100.0 → 0.101.0 — nvchecker bump\n\n- [x] emerge build + install\n" \
+         "- [x] `pkgcheck scan --commits --net` clean\n- smoke: --version ok: crush: crush version 0.101.0\n" \
+         "- diff vs 0.100.0: no build-option surface changes\n\n" \
+         "Notes (information only, not a draft reason):\n" \
+         "- go floor raised: 1.27.0 -> 1.27.3 (go.mod: go 1.27.3)\n\nCloses #16664\n"
+
 # the open-PR guard: a blip must not cost a bump that is already built, and a refusal must
 # say what gh said
 stub = File.join(Dir.mktmpdir('autobump-gh-'), 'gh')
