@@ -221,6 +221,8 @@ check 't3code-bin 16620: a rebuilt compile cache is a note',
 check 'the same cache with nothing added in its place drafts',
       settle.call(t3, added: ["opt/T3 Code (Beta)/resources/other/3f9a01bc"], version_ok: true)[2], nil
 check 'and so does one with no tree-added.txt to read', settle.call(t3, added: nil, version_ok: true)[2], nil
+check 'a hex-named file outside a cache directory drafts even when replaced',
+      Autobump::BuildTest.data_only_removals?(['usr/bin/deadbeef12'], ['usr/bin/cafebabe34']), false
 siyuan = %w[opt/SiYuan/locales/pt-PT.pak opt/SiYuan/resources/stage/build/app/602.04bc8988a95e6a337cd5.js
             opt/SiYuan/resources/stage/build/app/base.2a97d70b345d5431d8ce.css
             opt/SiYuan/resources/stage/loading-pure.svg opt/SiYuan/resources/stage/loading.svg]

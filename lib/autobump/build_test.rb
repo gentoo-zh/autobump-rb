@@ -132,9 +132,10 @@ module Autobump
       dirs.last == 'resources' || dirs.any? { |d| %w[locales locale].include?(d) }
     end
 
-    # A hash-named entry whose directory gained another hash-named entry: a cache rebuilt.
+    # A hash-named entry in a cache directory that gained another hash-named entry: a cache
+    # rebuilt. Outside a cache directory a hex name may be a binary, so it stays a draft.
     def self.hash_replaced?(path, added)
-      return false unless hash_only?(path)
+      return false unless hash_only?(path) && File.dirname(path).split('/').any? { |d| d.match?(/cache/i) }
 
       dir = File.dirname(path)
       added.any? { |a| a != path && File.dirname(a) == dir && hash_only?(a) }
