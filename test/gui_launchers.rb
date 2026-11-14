@@ -67,6 +67,14 @@ Dir.mktmpdir('autobump-launchers-') do |dir|
   check 'an entry that opens a browser leaves nothing to probe (v2rayA)',
         G.call(['/usr/bin/v2raya', '/usr/bin/v2raya_core', stray]), []
 
+  bare = File.join(dir, 'usr/share/applications/cursor.desktop')
+  File.write(bare, "[Desktop Entry]\nExec=cursor --ozone-platform-hint=auto %F\n")
+  path = ENV['PATH']
+  ENV['PATH'] = '/usr/sbin:/usr/bin:/sbin:/bin'
+  check 'a bare Exec= name is found among the package\'s PATH files, off the probe\'s PATH (cursor)',
+        G.call(['/opt/bin/cursor', '/opt/cursor/bin/cursor', bare]), ['/opt/bin/cursor']
+  ENV['PATH'] = path
+
   last = nil
   probe = lambda do |body|
     File.write(app, "#!/bin/sh\n#{body}\n")
