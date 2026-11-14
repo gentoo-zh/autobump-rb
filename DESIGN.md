@@ -42,7 +42,8 @@ the build test and finalize (a local commit) but stops before push/PR; `--pr` ru
 `keep_old = N`, stage 7 keeps the N most-recent versions instead of dropping the replaced one (adds the
 new ebuild, drops anything older; `0` keeps all), and `pkgdev manifest` keeps the DIST of whatever remains.
 
-A PR opens as a draft when only amd64 was built (multi-arch keywords), when the GUI launch probe
+A PR opens as a draft when it is keyworded on an arch the PR CI does not build (it builds amd64,
+and arm64 when keyworded), when the GUI launch probe
 failed, or when a rule accepted a difference it would otherwise escalate on (`accepted_diffs`: a raised
 Rust floor, a raised Go floor that another go.mod under S disagrees with, a toolchain note, accepted
 payload removals that are not all data). The body lists each accepted difference,

@@ -40,7 +40,7 @@ module Autobump
       @ev.write('defer.txt', "#{defer}\n") if defer && esc.empty?
       ma = multiarch?
       gui = gui?
-      Log.log 'multi-arch KEYWORDS: non-amd64 will be marked untested, PR will be draft' if ma
+      Log.log "KEYWORDS the PR CI does not build (#{untested_arches.join(' ')}): PR will be draft" if ma
       # A missing project-generated bundle is temporal, not a safety judgment, so it defers --
       # but only when nothing else escalated: a package that is unsafe for another reason must
       # reach a human now instead of retrying until the sweep's cap.
@@ -198,7 +198,16 @@ module Autobump
       @keywords_line ||= @text.lines.find { |l| l =~ /^[[:space:]]*KEYWORDS=/ }&.chomp
     end
 
-    def multiarch? = (kl = keywords_line) ? kl.scan(/~[a-z0-9]+/).length > 1 : false
+    # emerge-on-PR installs every bump on amd64, and on arm64 when it is keyworded there, so
+    # only the other keywords go untested until a human builds them
+    CI_ARCHES = %w[amd64 arm64].freeze
+
+    def untested_arches
+      value = keywords_line.to_s[/KEYWORDS=["']?([^"'#]*)/, 1].to_s
+      value.split.map { |k| k.delete_prefix('~') }.reject { |k| k.start_with?('-') || CI_ARCHES.include?(k) }
+    end
+
+    def multiarch? = !untested_arches.empty?
     def gui? = @text.lines.any? { |l| l =~ /^[[:space:]]*inherit.*(desktop|xdg)/ }
   end
 end

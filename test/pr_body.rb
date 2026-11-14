@@ -159,8 +159,18 @@ accepted = Autobump::PR.create_args(repo: 'gentoo-zh/overlay', head: 'b', title:
 check_eq 'an accepted difference opens a draft', accepted.include?('--draft'), true
 check_eq 'a draft names every reason',
          Autobump::PR.draft_reasons(multiarch: true, gui_failed: true, accepted: true),
-         ['only amd64 was built', 'the GUI launch probe failed', 'autobump accepted a difference']
+         ['only amd64 and arm64 were built', 'the GUI launch probe failed', 'autobump accepted a difference']
 check_eq 'a plain PR has no draft reason', Autobump::PR.draft_reasons(multiarch: false), []
+
+untested = lambda do |line|
+  c = Autobump::Classify.allocate
+  c.instance_variable_set(:@text, "EAPI=8\n#{line}\n")
+  [c.send(:untested_arches), c.send(:multiarch?)]
+end
+check_eq 'amd64 and arm64 are both built by the PR CI', untested.call('KEYWORDS="-* ~amd64 ~arm64"'), [[], false]
+check_eq 'an amd64-only package is not a draft', untested.call('KEYWORDS="~amd64"'), [[], false]
+check_eq 'an arch the PR CI does not build drafts', untested.call('KEYWORDS="amd64 ~arm64 ~loong ~x86"'),
+         [%w[loong x86], true]
 
 # K. a difference a rule accepted instead of escalating is listed, so the reviewer sees what
 # the green build did not vouch for
