@@ -97,7 +97,7 @@ issue = args[0]
 if issue == "3":
     print("stage one")
     print("https://github.com/test/overlay/pull/123")
-    print("ok PR opened (draft: only amd64 was built)")
+    print("ok PR opened (draft: only amd64 and arm64 were built)")
 elif issue == "4":
     print(">> current: 2.0 -> target: 3.0")
     print(f"== evidence: {os.environ['EVIDENCE_DIR']} ==")
@@ -339,7 +339,7 @@ class AutobumpSweepTest(unittest.TestCase):
             any(
                 call[:3] == ["issue", "comment", "3"]
                 and "**autobump** bumped `cat/bump` → `2.0`" in call[-1]
-                and "pull/123 as a draft because only amd64 was built" in call[-1]
+                and "pull/123 as a draft because only amd64 and arm64 were built" in call[-1]
                 for call in self.gh_calls()
             )
         )
@@ -711,7 +711,7 @@ class AutobumpSweepTest(unittest.TestCase):
         self.assertEqual(
             result.stdout,
             "==== #3 cat/bump -> 2.0 (1/5) ====\n"
-            "stage one\nhttps://github.com/test/overlay/pull/123\nok PR opened (draft: only amd64 was built)\n\n"
+            "stage one\nhttps://github.com/test/overlay/pull/123\nok PR opened (draft: only amd64 and arm64 were built)\n\n"
             "==== sweep summary ====\n#3  bumped\n",
         )
 

@@ -36,8 +36,8 @@ module Autobump
       [nil, last.empty? ? 'gh failed' : last]
     end
 
-    # A multi-arch bump is opened as a draft: only amd64 was built here, so the other
-    # keywords are untested until a human says otherwise. So is one whose GUI launch probe
+    # A bump keyworded on an arch the PR CI does not build (amd64 and arm64 are) is opened as
+    # a draft: those keywords are untested until a human says otherwise. So is one whose GUI launch probe
     # failed: reasonix-desktop merged five bumps that installed no Electron shell. So is one
     # that passed only because a rule accepted a difference it would otherwise escalate on:
     # a green build is not the review that difference needs.
@@ -50,7 +50,7 @@ module Autobump
 
     # Why the PR is a draft, in the words the sweep copies into the issue's status comment
     def self.draft_reasons(multiarch:, gui_failed: false, accepted: false)
-      [('only amd64 was built' if multiarch),
+      [('only amd64 and arm64 were built' if multiarch),
        ('the GUI launch probe failed' if gui_failed),
        ('autobump accepted a difference' if accepted)].compact
     end
