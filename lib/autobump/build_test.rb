@@ -210,14 +210,17 @@ module Autobump
       files.grep(DESKTOP_ENTRY).empty? ? launchers(files) : desktop_programs(files)
     end
 
-    # the package's own files its .desktop entries run
+    # the package's own files its .desktop entries run. A bare name is looked up among the
+    # package's PATH files, not the probe's PATH: cursor's entry runs `cursor`, installed as
+    # /opt/bin/cursor, and the test container's PATH has no /opt/bin.
     def self.desktop_programs(files)
       owned = files.to_set
+      on_path = files.grep(ON_PATH)
       execs = files.grep(DESKTOP_ENTRY).filter_map { |entry| desktop_exec(File.read(entry)) rescue nil }
       execs.filter_map do |cmd|
         next cmd if cmd.start_with?('/')
 
-        ENV.fetch('PATH', '').split(':').map { |dir| File.join(dir, cmd) }.find { |f| owned.include?(f) }
+        on_path.find { |f| File.basename(f) == cmd }
       end.select { |f| owned.include?(f) }.uniq
     end
 
