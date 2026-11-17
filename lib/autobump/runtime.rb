@@ -30,6 +30,12 @@ module Autobump
     :accepted_diffs, :info_notes, :payload_pending,
     keyword_init: true
   ) do
+    # sh runs emerge, ebuild phases and the freshly installed upstream programs (smoke and GUI
+    # probes); none of them needs the GitHub tokens the gh/git calls elsewhere use.
+    SH_ENV = { 'LC_ALL' => 'C' }.merge(
+      %w[GH_TOKEN GITHUB_TOKEN GH_TOKEN_GENTOO_ZH GH_TOKEN_GENTOO_ZH_DRAFTS].to_h { [_1, nil] }
+    ).freeze
+
     # run a command; return [combined stdout+stderr, ok?, exit_code]. Array form (never a
     # shell), so args need no quoting. LC_ALL=C is a deliberate determinism aid for the
     # ebuild/emerge output this helper parses: QA-notice / soname text must not be
@@ -50,7 +56,7 @@ module Autobump
         file.close
         path = File.realpath(file.path)
         streams = stderr_only ? { out: File::NULL, err: [path, 'w'] } : { out: [path, 'w'], err: %i[child out] }
-        pid = Process.spawn({ 'LC_ALL' => 'C' }, *cmd.compact, **streams, **spawn_opts, pgroup: true)
+        pid = Process.spawn(SH_ENV, *cmd.compact, **streams, **spawn_opts, pgroup: true)
         code = wait_for(pid, timeout)
         end_leftovers(pid, path)
         [File.read(path), code.zero?, code]
