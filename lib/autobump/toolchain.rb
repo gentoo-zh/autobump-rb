@@ -4,11 +4,13 @@ module Autobump
   # because the build host has the newest compiler, so the copied ebuild would ship a floor that
   # is too low for anyone on an older toolchain. Read the floor from the new source tree and keep
   # the ebuild in step: raise an explicit `>=dev-lang/go-X` atom or `RUST_MIN_VER` in place, and
-  # escalate when the atom cannot be rewritten safely or ::gentoo has no compiler new enough.
+  # escalate when the atom cannot be rewritten safely. A floor no compiler in ::gentoo meets yet
+  # only waits for one to land: it still exits 3, but prints a `result:` line marking it blocked
+  # so the sweep retries it each run instead of recording it for good.
   # A floor the ebuild does not state (no atom, no RUST_MIN_VER) or a bump whose vendor bundle
   # is regenerated is not edited: the bump builds as before, and a note in accepted_diffs makes
   # the PR a draft so a human adds the dependency. A raised Go atom only goes to info_notes:
-  # go_plan escalates a floor no visible dev-lang/go meets before it rewrites, and the build runs
+  # go_plan stops at a floor no visible dev-lang/go meets before it rewrites, and the build runs
   # against the raised atom; it still drafts when another go.mod under S states another floor. A
   # raised RUST_MIN_VER still drafts. Only ever raises; never adds an upper bound,
   # never touches RUST_MAX_VER. Runs after the artifact diff unpacked the new tree, before the build test, so
@@ -18,6 +20,8 @@ module Autobump
     Plan = Struct.new(:action, :text, :note, :reason, :info, keyword_init: true) do
       def self.none = new(action: :none)
       def self.escalate(reason) = new(action: :escalate, reason: reason)
+      # the floor is above every compiler ::gentoo offers; nothing in the ebuild needs a human yet
+      def self.blocked(reason) = new(action: :blocked, reason: reason)
       # left for a human on the draft PR: the bump builds, but the ebuild states too low a floor
       def self.note(note) = new(action: :note, note: note)
     end
@@ -99,8 +103,10 @@ module Autobump
         return Plan.none if floor.nil? && best && compare(required, best) <= 0
       end
       if best.nil? || compare(required, best) > 0
-        return Plan.escalate("go.mod needs Go #{required} (#{line}), above the best dev-lang/go in ::gentoo " \
-                             "(#{best || 'none visible'}); the bump cannot build until it lands")
+        reason = "go.mod needs Go #{required} (#{line}), above the best dev-lang/go in ::gentoo " \
+                 "(#{best || 'none visible'}); the bump cannot build until it lands"
+        # an atom that rules the floor out needs a human whatever lands
+        return conflicts.empty? ? Plan.blocked(reason) : Plan.escalate(reason)
       end
       unless conflicts.empty?
         spelled = conflicts.map { |_, m| m[0] }.uniq.join(', ')
@@ -176,8 +182,10 @@ module Autobump
       floor = rust_floor(sets, eclass_default)
       return Plan.none if floor && compare(required, floor) <= 0
       if best.nil? || compare(required, best) > 0
-        return Plan.escalate("Cargo.toml needs Rust #{required} (#{line}), above the best dev-lang/rust or " \
-                             "rust-bin in ::gentoo (#{best || 'none visible'}); the bump cannot build until it lands")
+        reason = "Cargo.toml needs Rust #{required} (#{line}), above the best dev-lang/rust or " \
+                 "rust-bin in ::gentoo (#{best || 'none visible'}); the bump cannot build until it lands"
+        # RUST_MAX_VER below the floor needs a human whatever lands
+        return max && compare(required, max) > 0 ? Plan.escalate(reason) : Plan.blocked(reason)
       end
       if sets.empty?
         return Plan.note("Cargo.toml requires rust #{required} (#{line}), above rust.eclass's oldest slot " \
@@ -260,6 +268,13 @@ module Autobump
       if (esc = plans.find { |p| p.action == :escalate })
         c.evidence.write('toolchain.txt', "#{esc.reason}\n")
         raise Escalate.new(esc.reason, c.evidence.dir)
+      end
+      if (blocked = plans.find { |p| p.action == :blocked })
+        c.evidence.write('toolchain.txt', "#{blocked.reason}\n")
+        result = { 'blocked' => 'toolchain', 'exit' => 3, 'reason' => blocked.reason }
+        c.evidence.write('result.json', "#{JSON.pretty_generate(result)}\n")
+        puts "result: #{JSON.generate(result)}"
+        raise Escalate.new(blocked.reason, c.evidence.dir)
       end
       changed = plans.select { |p| p.action == :rewrite }
       noted = plans.select { |p| %i[rewrite note].include?(p.action) }
