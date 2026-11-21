@@ -3,6 +3,7 @@
 # Test the Go/Rust toolchain floor stage: what it reads from go.mod and Cargo.toml, which
 # ebuild lines it raises, and when it escalates instead. Hermetic: the source tree, the
 # ::gentoo eclasses and portageq are stubbed. Run: ruby test/toolchain.rb
+require 'stringio'
 require 'tmpdir'
 require_relative '../lib/autobump'
 
@@ -68,7 +69,8 @@ class StubToolchain < Autobump::Toolchain
   def best_visible(atom) = BEST[atom]
 end
 
-# [ebuild text after the stage, accepted differences, escalation message or nil, stub, info notes]
+# [ebuild text after the stage, accepted differences, escalation message or nil, stub, info notes,
+#  the `result:` line the stage printed or nil, the evidence files]
 def run_stage(ebuild, tree = nil, payload: false, bundles: nil, unpacked: true, listed: true, **files)
   tree ||= files # a hash written without braces arrives as keywords
   Dir.mktmpdir('autobump-toolchain-test-') do |dir|
@@ -76,13 +78,19 @@ def run_stage(ebuild, tree = nil, payload: false, bundles: nil, unpacked: true, 
     File.write(path, ebuild)
     ctx = Ctx.new(payload: payload, new_ebuild: path, evidence: MemoryEvidence.new, bundles: bundles)
     stage = StubToolchain.new(ctx, tree, unpacked: unpacked, listed: listed)
+    out = StringIO.new
+    $stdout = out
     escalation = begin
       stage.run
       nil
     rescue Autobump::Escalate => e
       e.message
+    ensure
+      $stdout = STDOUT
     end
-    [File.read(path), ctx.accepted_diffs, escalation, stage, ctx.info_notes]
+    result = out.string.lines.find { |l| l.start_with?('result: ') }
+    [File.read(path), ctx.accepted_diffs, escalation, stage, ctx.info_notes,
+     result && JSON.parse(result.delete_prefix('result: ')), ctx.evidence.files]
   end
 end
 
@@ -315,6 +323,61 @@ check 'rust: no Cargo.toml in S still reads the members', notes.to_a.first&.incl
 # fix 8: an array of tables ends [package]
 check 'toml: [[bin]] ends the [package] section',
       T.toml_value("[package]\nname = \"x\"\n[[bin]]\nrust-version = \"1.99\"\n", 'package', 'rust-version'), nil
+
+# --- a compiler ::gentoo has not shipped yet blocks; a ruled-out floor still escalates -------
+BLOCKED_GO = { 'blocked' => 'toolchain', 'exit' => 3,
+               'reason' => 'go.mod needs Go 1.28.0 (go 1.28.0), above the best dev-lang/go in ::gentoo ' \
+                           '(1.27.2); the bump cannot build until it lands' }.freeze
+text, notes, esc, _, info, result, files = run_stage(go_ebuild('>=dev-lang/go-1.26.9'), '/w/src/go.mod' => "go 1.28.0\n")
+check 'blocked: a go floor above the best dev-lang/go prints a blocked result', result, BLOCKED_GO
+check 'blocked: it still exits 3, so an older sweep escalates as before', esc, BLOCKED_GO['reason']
+check 'blocked: the result is kept in the evidence pack', JSON.parse(files['result.json'].to_s), BLOCKED_GO
+check 'blocked: the ebuild is left alone and nothing is noted', [text, notes, info], [go_ebuild('>=dev-lang/go-1.26.9'), nil, nil]
+check 'blocked: go_plan says blocked',
+      T.go_plan(go_ebuild('>=dev-lang/go-1.26.9'), required: '1.28.0', line: 'go 1.28.0',
+                eclass_floor: '1.24.11', best: '1.27.2').action, :blocked
+check 'blocked: no visible dev-lang/go at all is blocked too',
+      T.go_plan(go_ebuild('>=dev-lang/go-1.26.9'), required: '1.27.0', line: 'go 1.27.0',
+                eclass_floor: '1.24.11', best: nil).action, :blocked
+_, _, esc, _, _, result = run_stage("EAPI=8\ninherit go-module\n", '/w/src/go.mod' => "go 1.28.0\n")
+check 'blocked: no atom and a floor above the best dev-lang/go', [result&.fetch('blocked'), esc.nil?], ['toolchain', false]
+_, _, esc, _, _, result = run_stage(go_ebuild('>=dev-lang/go-1.25.13'), { '/w/src/go.mod' => "go 1.28.0\n" },
+                                    bundles: Object.new)
+check 'blocked: a regenerated vendor bundle above the best dev-lang/go', result&.fetch('blocked'), 'toolchain'
+check 'blocked: go_plan at the best dev-lang/go is none, not blocked',
+      T.go_plan(go_ebuild('>=dev-lang/go-1.27.2'), required: '1.27.2', line: 'go 1.27.2',
+                eclass_floor: '1.24.11', best: '1.27.2').action, :none
+_, notes, esc, _, _, result = run_stage(go_ebuild('>=dev-lang/go-1.26.9'), '/w/src/go.mod' => "go 1.27.2\n")
+check 'blocked: a floor equal to the best dev-lang/go raises without a result', [esc, result, notes], [nil, nil, nil]
+_, _, esc, _, _, result = run_stage(go_ebuild('>=dev-lang/go-1.26.9'), '/w/src/go.mod' => "go 1.25.0\n")
+check 'blocked: a floor under the best dev-lang/go passes without a result', [esc, result], [nil, nil]
+
+upper = go_ebuild('>=dev-lang/go-1.25.13 <dev-lang/go-1.27')
+_, _, esc, _, _, result, files = run_stage(upper, '/w/src/go.mod' => "go 1.27.0\n")
+check 'conflict: an upper bound the floor reaches escalates with no result', [esc&.include?('rules out'), result, files['result.json']],
+      [true, nil, nil]
+_, _, esc, _, _, result = run_stage(upper, '/w/src/go.mod' => "go 1.28.0\n")
+check 'conflict: an upper bound and a floor above the best dev-lang/go still escalate',
+      [esc&.include?('(1.27.2)'), result], [true, nil]
+check 'conflict: go_plan escalates rather than blocks',
+      T.go_plan(upper, required: '1.28.0', line: 'go 1.28.0', eclass_floor: '1.24.11', best: '1.27.2').action, :escalate
+
+_, _, esc, _, _, result = run_stage(rust_ebuild('RUST_MIN_VER="1.85.0"'),
+                                    '/w/src/Cargo.toml' => "[package]\nrust-version = \"1.100\"\n")
+check 'blocked: a rust floor above the best rust or rust-bin prints a blocked result',
+      [result&.fetch('blocked'), esc == result&.fetch('reason')], ['toolchain', true]
+_, _, esc, _, _, result = run_stage(rust_ebuild('RUST_MIN_VER="1.85.0"'),
+                                    '/w/src/Cargo.toml' => "[package]\nrust-version = \"1.99\"\n")
+check 'blocked: a rust floor at the best rust-bin raises without a result', [esc, result], [nil, nil]
+maxed_above = "EAPI=8\nRUST_MAX_VER=\"1.90.0\"\nRUST_MIN_VER=\"1.85.0\"\ninherit cargo\n"
+_, _, esc, _, _, result = run_stage(maxed_above, '/w/src/Cargo.toml' => "[package]\nrust-version = \"1.100\"\n")
+check 'conflict: RUST_MAX_VER under a floor above the best rust escalates with no result',
+      [esc&.include?('(1.99.0)'), result], [true, nil]
+
+mixed = "EAPI=8\nRUST_MAX_VER=\"1.90.0\"\nRUST_MIN_VER=\"1.85.0\"\ninherit cargo go-module\nBDEPEND=\">=dev-lang/go-1.25.13\"\n"
+_, _, esc, _, _, result = run_stage(mixed, '/w/src/go.mod' => "go 1.28.0\n",
+                                           '/w/src/Cargo.toml' => "[package]\nrust-version = \"1.91\"\n")
+check 'both: an escalation beside a blocked floor wins', [esc&.include?('RUST_MAX_VER=1.90.0'), result], [true, nil]
 
 # --- both, and what is skipped -----------------------------------------------------------
 both = "EAPI=8\nRUST_MIN_VER=\"1.85.0\"\ninherit cargo go-module\nBDEPEND=\">=dev-lang/go-1.25.13\"\n"

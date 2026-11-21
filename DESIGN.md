@@ -31,7 +31,7 @@ The op-registry deepening and richer GUI-package handling live in a sibling repo
 | 3 preflight | `preflight.rb`, `cleanup.rb` | clean-tree gate, sync master, branch, baseline pkgcheck |
 | 4 distfiles | `distfiles.rb` | write the new ebuild, fetch, regenerate Manifest |
 | 5 artifact diff | `artifact_diff.rb` | payload file-tree diff (a removal nothing names waits for stage 6) / source build-surface diff (a Cargo feature the ebuild never names is ignored) |
-| 5b toolchain | `toolchain.rb` | raise an explicit Go/Rust floor (`>=dev-lang/go-X`, `RUST_MIN_VER`) to the new source's; note a missing atom on a draft PR; escalate when ::gentoo lacks the compiler or the atoms cannot be raised in place |
+| 5b toolchain | `toolchain.rb` | raise an explicit Go/Rust floor (`>=dev-lang/go-X`, `RUST_MIN_VER`) to the new source's; note a missing atom on a draft PR; report blocked when ::gentoo lacks the compiler; escalate when the atoms cannot be raised in place |
 | 6 build test | `build_test.rb` | emerge with CI's elog config, gate, smoke, GUI probe, qa-vdb; accept stage 5's pending removals only after a clean install and a smoke test that ran the app |
 | 7 finalize | `finalize.rb` | drop old ebuild (per-package `keep_old = N` keeps the N most-recent instead), pkgcheck delta, commit as the bot |
 | 8 PR | `pr.rb` | push, open a PR, cc maintainers, open a draft for the reasons below |
@@ -106,6 +106,12 @@ A 404 on any URI the snapshot does not cover escalates as before; a mirror 404, 
 local failure are judged as before. A bundle decision prints `result: <json>` and writes
 `result.json` into the evidence pack, carrying `"bundle": true`, so the sweep counts it under its
 bundle policy instead of as a transient defer.
+
+A Go or Rust floor above the best compiler ::gentoo offers exits 3 the same way and prints
+`result: {"blocked": "toolchain", "exit": 3, "reason": ...}`, also kept as `result.json`. Nothing
+in the ebuild needs a human; the bump builds once the compiler lands, so the sweep retries it
+instead of recording the escalation. An atom or `RUST_MAX_VER` that rules the floor out still
+escalates without the line, and so does any other escalation of the same stage.
 
 ## Testing
 

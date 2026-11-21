@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end checks for scripts/autobump-sweep.py without GitHub or git."""
 
+import datetime
 import json
 import os
 from pathlib import Path
@@ -62,6 +63,8 @@ elif args[:2] == ["issue", "view"]:
         "12": "[nvchecker] cat/ahead can be bump to 9.0",
         "9": "[nvchecker] cat/binary can be bump to 8.0",
         "17": "[nvchecker] cat/missing can be bump to 13.0",
+        "18": "[nvchecker] cat/blocked can be bump to 14.0",
+        "19": "[nvchecker] cat/blocked can be bump to 14.1",
     }
     if args[2] == "10":
         raise SystemExit(1)
@@ -69,6 +72,8 @@ elif args[:2] == ["issue", "view"]:
 elif args[0] == "api":
     if os.environ.get("GH_API_FAIL"):
         raise SystemExit(1)
+elif args[:2] == ["issue", "edit"]:
+    pass
 elif args[:2] == ["issue", "comment"]:
     issue = args[2]
     state = Path(os.environ["GH_STATE"])
@@ -107,6 +112,17 @@ elif issue == "17":
         "== not mechanically safe (upstream distfile for 13.0 is missing (404/403), not a slow mirror); "
         f"evidence: {os.environ['EVIDENCE_DIR']} =="
     )
+    raise SystemExit(3)
+elif issue in {"18", "19"}:
+    if os.environ.get("TOOLCHAIN_LANDED"):
+        print("bumped")
+        raise SystemExit(0)
+    reason = ("go.mod needs Go 1.28.0 (go 1.28.0), above the best dev-lang/go in ::gentoo (1.27.2); "
+              "the bump cannot build until it lands")
+    # an engine from before the blocked outcome escalates without the line
+    if not os.environ.get("OLD_ENGINE"):
+        print("result: " + json.dumps({"blocked": "toolchain", "exit": 3, "reason": reason}))
+    print(f"== not mechanically safe ({reason}); evidence: {os.environ['EVIDENCE_DIR']} ==")
     raise SystemExit(3)
 elif issue == "5":
     print(f"== evidence: {os.environ['EVIDENCE_DIR']} ==")
@@ -206,6 +222,9 @@ class AutobumpSweepTest(unittest.TestCase):
                 autobump = true
 
                 ["cat/missing"]
+                autobump = true
+
+                ["cat/blocked"]
                 autobump = true
 
                 ["cat/regex"]
@@ -619,6 +638,137 @@ class AutobumpSweepTest(unittest.TestCase):
             ],
             self.engine_calls(),
         )
+
+
+    BLOCKED_REASON = ("go.mod needs Go 1.28.0 (go 1.28.0), above the best dev-lang/go in ::gentoo (1.27.2); "
+                      "the bump cannot build until it lands")
+
+    def days_ago(self, days):
+        return (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+
+    def comments_on(self, issue):
+        return [call[-1] for call in self.gh_calls() if call[:3] == ["issue", "comment", issue]]
+
+    def edits_on(self, issue):
+        return [call for call in self.gh_calls() if call[:3] == ["issue", "edit", issue]]
+
+    def test_a_blocked_toolchain_is_recorded_not_deferred(self):
+        result = self.run_sweep("18", "--comment")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        until = (datetime.date.today() + datetime.timedelta(days=14)).isoformat()
+        self.assertIn(f"#18  blocked, retrying until {until}: {self.BLOCKED_REASON}", result.stdout)
+        done = self.done.read_text()
+        self.assertIn(f"blocked cat/blocked 14.0 {datetime.date.today().isoformat()}\n", done)
+        self.assertNotIn("cat/blocked 14.0 deferred", done)
+        self.assertEqual(self.attempt_lines(), [])
+        comment = self.comments_on("18")[-1]
+        self.assertIn("**autobump** can't bump `cat/blocked` → `14.0` yet: **go.mod needs Go 1.28.0", comment)
+        self.assertIn(f"Will retry automatically on every run; if it still can't build by {until}", comment)
+
+    def test_a_blocked_bump_is_retried_each_run_outside_attempts_and_comments_once(self):
+        first = self.run_sweep("18", "--comment")
+        comments, edits = len(self.comments_on("18")), len(self.edits_on("18"))
+        second = self.run_sweep("18", "--comment")
+        third = self.run_sweep("18", "--comment")
+
+        for run in (first, second, third):
+            self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual([call[0] for call in self.engine_calls()], ["18", "18", "18"])
+        today = datetime.date.today().isoformat()
+        self.assertIn(f"#18  blocked since {today}, retrying until", third.stdout)
+        self.assertEqual(self.attempt_lines(), [])
+        self.assertEqual(self.done.read_text().count("blocked cat/blocked 14.0"), 1)
+        # the retries leave the first comment and the assignee alone
+        self.assertEqual(len(self.comments_on("18")), comments)
+        self.assertEqual(len(self.edits_on("18")), edits)
+
+    def test_a_blocked_bump_builds_once_the_compiler_lands(self):
+        self.run_sweep("18", "--comment")
+        result = self.run_sweep("18", "--comment", environment_extra={"TOOLCHAIN_LANDED": "1"})
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("#18  bumped", result.stdout)
+        self.assertIn("cat/blocked 14.0 bumped", self.done.read_text())
+        self.assertIn("**autobump** bumped `cat/blocked` → `14.0`", self.comments_on("18")[-1])
+        self.assertIn("skip (cat/blocked 14.0 bumped", self.run_sweep("18").stdout)
+
+    def test_a_blocked_bump_escalates_after_fourteen_days(self):
+        with self.done.open("a") as f:
+            f.write(f"blocked cat/blocked 14.0 {self.days_ago(13)}\n")
+        held = self.run_sweep("18", "--comment")
+        self.assertIn(f"#18  blocked since {self.days_ago(13)}", held.stdout)
+        self.assertEqual(self.comments_on("18"), [])
+
+        self.done.write_text(f"blocked cat/blocked 14.0 {self.days_ago(14)}\n")
+        result = self.run_sweep("18", "--comment")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"#18  escalated: {self.BLOCKED_REASON}", result.stdout)
+        self.assertIn("cat/blocked 14.0 deferred", self.done.read_text())
+        self.assertIn("can't bump `cat/blocked` → `14.0` mechanically", self.comments_on("18")[-1])
+        self.assertIn("skip (cat/blocked 14.0 deferred", self.run_sweep("18").stdout)
+        self.assertEqual(self.attempt_lines(), [])
+
+    def test_a_newer_version_is_not_held_by_an_old_blocked_record(self):
+        with self.done.open("a") as f:
+            f.write(f"blocked cat/blocked 14.0 {self.days_ago(20)}\n")
+        result = self.run_sweep("19", "--comment")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call[0] for call in self.engine_calls()], ["19"])
+        self.assertIn("#19  blocked, retrying until", result.stdout)
+        self.assertIn(f"blocked cat/blocked 14.1 {datetime.date.today().isoformat()}", self.done.read_text())
+        self.assertIn("`cat/blocked` → `14.1` yet", self.comments_on("19")[-1])
+
+    def test_an_old_engine_still_escalates(self):
+        result = self.run_sweep("18", "--comment", environment_extra={"OLD_ENGINE": "1"})
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"#18  escalated: {self.BLOCKED_REASON}", result.stdout)
+        self.assertIn("cat/blocked 14.0 deferred", self.done.read_text())
+        self.assertNotIn("blocked cat/blocked", self.done.read_text())
+
+    def test_an_old_ledger_entry_still_skips(self):
+        # a version escalated before the blocked outcome existed stays escalated
+        with self.done.open("a") as f:
+            f.write("cat/blocked 14.0 deferred 2026-11-20\n")
+        result = self.run_sweep("18", "2")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("#18  skip (cat/blocked 14.0 deferred 2026-11-20)", result.stdout)
+        self.assertIn("#2  skip (cat/done 1.0 bumped 2026-09-01)", result.stdout)
+        self.assertEqual(self.engine_calls(), [])
+
+    def test_a_blocked_record_with_an_unreadable_date_starts_afresh(self):
+        with self.done.open("a") as f:
+            f.write("blocked cat/blocked 14.0 someday\n")
+        result = self.run_sweep("18")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("#18  blocked, retrying until", result.stdout)
+
+    def test_a_blocked_start_date_reaches_the_worker_and_its_delta(self):
+        plan = json.loads(self.run_sweep("18", "--plan", "1").stdout)
+        item = plan["shards"][0]["items"][0]
+        self.assertNotIn("blocked_since", item)
+        delta = Path(self.tempdir.name) / "worker-0.json"
+        self.assertEqual(self.run_worker([item], delta, "--comment").returncode, 0)
+        today = datetime.date.today().isoformat()
+        self.assertEqual(json.loads(delta.read_text())["done"], [f"blocked cat/blocked 14.0 {today}"])
+        self.assertEqual(self.run_collect(plan, delta).returncode, 0)
+        comments = len(self.comments_on("18"))
+
+        plan = json.loads(self.run_sweep("18", "--plan", "1").stdout)
+        item = plan["shards"][0]["items"][0]
+        self.assertEqual(item["blocked_since"], today)
+        delta = Path(self.tempdir.name) / "worker-1.json"
+        self.assertEqual(self.run_worker([item], delta, "--comment").returncode, 0)
+        worker_delta = json.loads(delta.read_text())
+        self.assertEqual([worker_delta["done"], worker_delta["attempts"]], [[], []])
+        self.assertIn(f"blocked since {today}", worker_delta["results"]["18"])
+        self.assertEqual(len(self.comments_on("18")), comments)
+        self.assertEqual(self.done.read_text().count("blocked cat/blocked 14.0"), 1)
 
 
     def test_planning_output_is_disjoint_and_covers_eligible_issues(self):
